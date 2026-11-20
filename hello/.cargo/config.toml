@@ -1,0 +1,8 @@
+[build]
+target = "armv7-sony-vita-newlibeabihf"
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[target.armv7-sony-vita-newlibeabihf]
+linker = "arm-vita-eabi-gcc"
