@@ -64,7 +64,8 @@ file as an autosave or copy it to a numbered slot.
 The interpreter VPK has run on a console. The smoke test opened the slot
 picker with the D-pad and Cross, then used touch to load a converted legacy
 autosave and enter Basic Training. The game wrote a subsequent autosave.
-The generated-Rust VPK has also passed the build and package checks. See the
+The generated-Rust VPK also installed and loaded an autosave. Its initial
+frame pacing and free memory favor the interpreter for current play. See the
 [engine status](https://github.com/vallfrr/nguidle-rust/blob/main/docs/STATUS.md)
 for the latest device results and remaining tests.
 
