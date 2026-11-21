@@ -1,6 +1,8 @@
 // NGU Idle PS Vita: C host (vitaGL + touch) around the Rust library `clr`.
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stddef.h>
+#include <malloc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,12 +34,14 @@ void ngu_frame(float dt, float x, float y, int down);
 void ngu_pad(uint32_t action);
 void ngu_scroll(float dx, float dy);
 int ngu_emit(void);
+uint32_t ngu_layout_us(void);
 const NguBatch *ngu_batches(void);
 const NguVertex *ngu_vertices(void);
 const uint8_t *ngu_tex(uint32_t id, uint32_t *w, uint32_t *h);
 const uint8_t *ngu_atlas(int *dirty, uint32_t *size);
 int ngu_text_request(char *buf, int cap, int *max, int *numeric);
 void ngu_text_submit(const char *text, int ok);
+uint64_t ngu_clock_us(uint64_t *debt_us);
 
 static void hlog(const char *fmt, ...) {
     FILE *f = fopen(LOG_FILE, "a");
@@ -133,8 +137,50 @@ static uint64_t now_us(void) { return sceKernelGetProcessTimeWide(); }
 
 #ifdef NGU_VITA_BENCHMARK
 #define PERF(code) code
-static uint64_t g_t_emit, g_t_draw, g_t_swap, g_t_logic, g_t_upload;
+static uint64_t g_t_emit, g_t_layout, g_t_draw, g_t_swap, g_t_logic, g_t_upload, g_t_input;
 static unsigned g_frame_ms[251], g_frame_max, g_draws, g_shots;
+static unsigned g_input_max, g_pad_edges;
+static atomic_uint g_scanout_frames, g_scanout_repeats, g_scanout_errors, g_scanout_gaps;
+static atomic_uint g_display_callbacks;
+
+static void display_callback(void *base) {
+    (void)base;
+    atomic_fetch_add_explicit(&g_display_callbacks, 1, memory_order_relaxed);
+}
+
+static int sample_display(SceSize args, void *argp) {
+    (void)args;
+    (void)argp;
+    void *previous = NULL;
+    uint16_t last_vblank = (uint16_t)sceDisplayGetVcount();
+    for (;;) {
+        if (sceDisplayWaitVblankStart() < 0) {
+            atomic_fetch_add_explicit(&g_scanout_errors, 1, memory_order_relaxed);
+            sceKernelDelayThread(16667);
+            continue;
+        }
+        // Let the new buffer latch before reading the current scanout address.
+        sceKernelDelayThread(600);
+        uint16_t vblank = (uint16_t)sceDisplayGetVcount();
+        // The hardware counter rolled over after 65,536 pulses during the soak.
+        uint16_t elapsed = (uint16_t)(vblank - last_vblank);
+        if (elapsed == 0) continue;
+        if (elapsed > 1) {
+            atomic_fetch_add_explicit(&g_scanout_gaps, elapsed - 1, memory_order_relaxed);
+        }
+        last_vblank = vblank;
+        SceDisplayFrameBuf frame = {.size = sizeof frame};
+        if (sceDisplayGetFrameBuf(&frame, SCE_DISPLAY_SETBUF_IMMEDIATE) < 0 ||
+            !frame.base || frame.width != 960 || frame.height != 544) {
+            atomic_fetch_add_explicit(&g_scanout_errors, 1, memory_order_relaxed);
+            previous = NULL;
+            continue;
+        }
+        atomic_uint *samples = frame.base == previous ? &g_scanout_repeats : &g_scanout_frames;
+        atomic_fetch_add_explicit(samples, 1, memory_order_relaxed);
+        previous = frame.base;
+    }
+}
 
 static unsigned percentile(unsigned total, unsigned percent) {
     unsigned target = (total * percent + 99) / 100;
@@ -154,16 +200,16 @@ static void save_shot(const char *path) {
     glReadPixels(0, 0, 960, 544, GL_RGBA, GL_UNSIGNED_BYTE, buf);
     FILE *f = fopen(path, "wb");
     if (!f) return;
-    uint8_t hdr[18] = {0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 960 & 255, 960 >> 8, 544 & 255, 544 >> 8, 32, 0x20};
-    fwrite(hdr, 1, 18, f);
-    for (int y = 543; y >= 0; y--) { // glReadPixels : origine bas ; TGA haut-gauche (0x20)
-        uint8_t row[960 * 4];
-        for (int x = 0; x < 960; x++) {
-            uint8_t *p = &buf[(y * 960 + x) * 4];
-            row[x * 4 + 0] = p[2]; row[x * 4 + 1] = p[1]; row[x * 4 + 2] = p[0]; row[x * 4 + 3] = 255;
-        }
-        fwrite(row, 1, sizeof row, f);
+    // Both GL and this TGA use a bottom-left origin.
+    uint8_t hdr[18] = {0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 960 & 255, 960 >> 8, 544 & 255, 544 >> 8, 32, 0};
+    for (size_t i = 0; i < sizeof buf; i += 4) {
+        uint8_t red = buf[i];
+        buf[i] = buf[i + 2];
+        buf[i + 2] = red;
+        buf[i + 3] = 255;
     }
+    fwrite(hdr, 1, 18, f);
+    fwrite(buf, 1, sizeof buf, f);
     fclose(f);
     hlog("[host] capture %s\n", path);
 }
@@ -263,6 +309,7 @@ static void draw_frame(void) {
     int nb = ngu_emit();
     PERF(uint64_t t1 = now_us());
     PERF(g_t_emit += t1 - t0);
+    PERF(g_t_layout += ngu_layout_us());
     PERF(g_draws += nb);
     const NguBatch *b = ngu_batches();
     const NguVertex *v = ngu_vertices();
@@ -285,7 +332,7 @@ static void draw_frame(void) {
     }
     PERF(uint64_t before_atlas = now_us());
     upload_atlas();
-    PERF(g_t_upload += now_us() - before_atlas);
+    PERF(uint64_t upload_time = now_us() - before_atlas);
     int32_t last_clip[4] = {-1, -1, -1, -1};
     for (int i = 0; i < nb; i++) {
         int x0 = b[i].clip[0] < 0 ? 0 : b[i].clip[0];
@@ -294,7 +341,12 @@ static void draw_frame(void) {
         int y1 = b[i].clip[3] > 544 ? 544 : b[i].clip[3];
         if (x1 <= x0 || y1 <= y0) continue;
         uint32_t id = b[i].tex;
+#ifdef NGU_VITA_BENCHMARK
+        int missing = id > 1 && id < MAX_TEX && !g_tex[id];
+        uint64_t texture_start = missing ? now_us() : 0;
+#endif
         GLuint texture = get_tex(id);
+        PERF(if (missing) upload_time += now_us() - texture_start);
         bind_texture(texture);
         if (texture == g_white) id = 0;
         uint8_t filter = b[i].nearest ? 2 : 1;
@@ -310,7 +362,8 @@ static void draw_frame(void) {
         }
         glDrawArrays(GL_TRIANGLES, b[i].first, b[i].count);
     }
-    PERF(g_t_draw += now_us() - t1);
+    PERF(g_t_upload += upload_time);
+    PERF(g_t_draw += now_us() - t1 - upload_time);
     if (g_want_shot) {
         save_shot(PROFILE_DIR "/shot.tga");
         g_want_shot = 0;
@@ -334,6 +387,8 @@ static void pad_update(const SceCtrlData *pad, uint64_t now, float dt, int enabl
     static uint64_t next_repeat;
     uint32_t pressed = pad->buttons & ~previous;
     previous = pad->buttons;
+    PERF(if (pressed & (SCE_CTRL_CROSS | SCE_CTRL_CIRCLE | SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER |
+                        SCE_CTRL_UP | SCE_CTRL_DOWN | SCE_CTRL_LEFT | SCE_CTRL_RIGHT)) g_pad_edges++);
     if (!enabled) {
         direction = 0;
         return;
@@ -421,13 +476,24 @@ static int game_thread(SceSize args, void *argp) {
 #ifdef NGU_VITA_VERTEX_BUFFER
     glGenBuffers(1, &g_vertex_buffer);
 #endif
+#ifdef NGU_VITA_BENCHMARK
+    vglSetDisplayCallback(display_callback);
+    SceUID monitor = sceKernelCreateThread("ngu-display-sample", sample_display,
+                                           0x10000100, 16 * 1024, 0, 0, NULL);
+    int monitor_status = monitor < 0 ? monitor : sceKernelStartThread(monitor, 0, NULL);
+    hlog("[host] Display monitor: %d\n", monitor_status);
+#endif
 
     uint64_t prev = sceKernelGetProcessTimeWide();
     PERF(uint64_t fps_t = prev);
     PERF(uint64_t last_present = prev);
     PERF(int fps_n = 0);
+#ifdef NGU_VITA_BENCHMARK
+    uint64_t previous_run_clocks = 0;
+#endif
     float tx = 0, ty = 0;
     int down = 0;
+    SceCtrlData pad = {.lx = 128, .ly = 128, .rx = 128, .ry = 128};
     for (;;) {
         SceTouchData td = {0};
         sceTouchPeek(SCE_TOUCH_PORT_FRONT, &td, 1);
@@ -442,11 +508,14 @@ static int game_thread(SceSize args, void *argp) {
         float dt = (now - prev) / 1000000.0f;
         prev = now;
         PERF(uint64_t tl = now_us());
-        SceCtrlData pad = {.lx = 128, .ly = 128, .rx = 128, .ry = 128};
-        sceCtrlPeekBufferPositive(0, &pad, 1);
+        SceCtrlData sample;
+        if (sceCtrlPeekBufferPositive(0, &sample, 1) > 0) pad = sample;
         pad_update(&pad, now, dt, !g_ime_active && !down);
+        PERF(uint64_t input_us = now_us() - tl);
+        PERF(g_t_input += input_us);
+        PERF(if (input_us > g_input_max) g_input_max = (unsigned)input_us);
         if (!g_ime_active) ngu_frame(dt, tx, ty, down);
-        PERF(g_t_logic += now_us() - tl);
+        PERF(g_t_logic += now_us() - tl - input_us);
         { static int sel_prev; int sel = (pad.buttons & SCE_CTRL_SELECT) != 0;
           if (sel && !sel_prev) g_want_shot = 1;
           sel_prev = sel; }
@@ -466,12 +535,33 @@ static int game_thread(SceSize args, void *argp) {
         fps_n++;
         if (end - fps_t >= 5000000) {
             float to_ms = 0.001f / fps_n;
-            hlog("[perf] t=%.1fs fps=%.2f p50=%u p95=%u p99=%u max=%u logic=%.2f emit=%.2f draw=%.2f upload=%.2f swap=%.2f batches=%u textures=%d gpu_mb=%u shots=%u\n",
+            sceKernelGetFreeMemorySize(&info);
+            SceKernelThreadInfo thread = {.size = sizeof thread};
+            int thread_status = sceKernelGetThreadInfo(sceKernelGetThreadId(), &thread);
+            struct mallinfo heap = mallinfo();
+            uint64_t run_clocks = thread.runClocks - previous_run_clocks;
+            previous_run_clocks = thread.runClocks;
+            uint64_t debt_us = 0;
+            uint64_t game_us = ngu_clock_us(&debt_us);
+            hlog("[perf] t=%.1fs fps=%.2f p50=%u p95=%u p99=%u max=%u input=%.2f input_max=%u pads=%u logic=%.2f layout=%.2f emit=%.2f draw=%.2f upload=%.2f swap=%.2f batches=%u textures=%d gpu_mb=%u shots=%u scanout=%u repeat=%u sample_errors=%u sample_gaps=%u gpu_submits=%u free_kib=%d/%d/%d heap_kib=%u/%u vgl_free_kib=%u/%u/%u thread=%d run_clocks=%llu core=%d affinity=%x game_us=%llu debt_us=%llu\n",
                 (end - load_start) / 1000000.0, fps_n * 1000000.0 / (end - fps_t),
                 percentile(fps_n, 50), percentile(fps_n, 95), percentile(fps_n, 99), g_frame_max,
-                g_t_logic * to_ms, g_t_emit * to_ms, g_t_draw * to_ms, g_t_upload * to_ms, g_t_swap * to_ms,
-                g_draws / fps_n, g_tex_count, g_tex_total >> 20, g_shots);
-            g_t_logic = g_t_emit = g_t_draw = g_t_upload = g_t_swap = 0;
+                g_t_input * to_ms, g_input_max, g_pad_edges, g_t_logic * to_ms, g_t_layout * to_ms, (g_t_emit - g_t_layout) * to_ms,
+                g_t_draw * to_ms, g_t_upload * to_ms, g_t_swap * to_ms,
+                g_draws / fps_n, g_tex_count, g_tex_total >> 20, g_shots,
+                atomic_exchange(&g_scanout_frames, 0), atomic_exchange(&g_scanout_repeats, 0),
+                atomic_exchange(&g_scanout_errors, 0), atomic_exchange(&g_scanout_gaps, 0),
+                atomic_exchange(&g_display_callbacks, 0),
+                info.size_user >> 10, info.size_cdram >> 10, info.size_phycont >> 10,
+                (unsigned)(heap.uordblks >> 10), (unsigned)(heap.fordblks >> 10),
+                (unsigned)(vglMemFree(VGL_MEM_RAM) >> 10), (unsigned)(vglMemFree(VGL_MEM_VRAM) >> 10),
+                (unsigned)(vglMemFree(VGL_MEM_PHYCONT) >> 10), thread_status, (unsigned long long)run_clocks,
+                thread.lastExecutedCpuId, thread.currentCpuAffinityMask,
+                (unsigned long long)game_us, (unsigned long long)debt_us);
+            sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
+            sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_OLED_DIMMING);
+            g_t_input = g_t_logic = g_t_layout = g_t_emit = g_t_draw = g_t_upload = g_t_swap = 0;
+            g_input_max = g_pad_edges = 0;
             memset(g_frame_ms, 0, sizeof g_frame_ms);
             g_frame_max = g_draws = g_shots = 0;
             fps_t = end;

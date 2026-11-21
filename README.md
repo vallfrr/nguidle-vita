@@ -37,8 +37,12 @@ elsewhere. Both builds verify the VPK headers and LiveArea PNG format.
 Use `NGU_VITA_BENCHMARK=ON` when building the VPK. The benchmark reads and
 writes saves under `ux0:data/ngu/bench/save/`. Copy a test autosave there
 before launching the benchmark. Every five seconds, `ux0:data/ngu/bench/host.txt`
-reports frame rate, the median and 95th/99th percentile frame intervals (ms),
-and the time spent on logic, scene emission, drawing and display sync. Select
+reports render-loop rate, frame intervals, the longest controller poll and
+dispatch, and the time spent on simulation, layout, scene emission, texture uploads,
+draw submission and display sync. The display sampler counts framebuffer
+changes, repeats and missed samples against the hardware vertical blanks.
+The log also records simulation time, pending simulation time, CPU time
+for the game thread, and free memory both outside and inside vitaGL. Select
 writes a screenshot to `ux0:data/ngu/bench/shot.tga`. Each window reports the
 number of screenshots taken so those windows can be excluded from timing
 comparisons.
@@ -46,6 +50,7 @@ comparisons.
 `NGU_VITA_PROFILE=ON` records slow game callbacks in `ux0:data/ngu/log.txt`.
 Use the default `OFF` for frame-rate comparisons. The default build requests
 444 MHz CPU and 222 MHz GPU clocks and streams one vertex buffer per frame.
+The interpreter uses thin link-time optimization under the compiler memory cap.
 For comparisons, `NGU_VITA_FAST_CLOCKS=OFF` requests 333 MHz and 166 MHz,
 and `NGU_VITA_VERTEX_BUFFER=OFF` uses client vertex arrays. The startup log
 records the actual clocks. `NGU_VITA_NATIVE_OPT=1` enables an experimental
@@ -61,8 +66,10 @@ tools. Pack the prepared files and original game assembly from that installation
 python3 tools/pack.py out/pc /path/to/NGUIdle_Data/Managed/Assembly-CSharp.dll out/vita/ngu.pak
 ```
 
-Install the VPK and copy `ngu.pak` to `ux0:data/ngu/ngu.pak`. The VPK contains
-only the engine and LiveArea assets. With a configured Vita agent, set
+Install the VPK and copy `ngu.pak` to `ux0:data/ngu/ngu.pak`. Repack the data if
+your archive predates the inclusion of `tags.json`, which places the game menus
+under the resource bar. The VPK contains only the engine and LiveArea assets.
+With a configured Vita agent, set
 `VITA_AGENT` to the local wrapper and use `bash nguidle-vita/deploy.sh`.
 Pass `pak` if you also want to deploy the prepared data.
 The deployment script names each uploaded VPK by its content hash. Old VPKs

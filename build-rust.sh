@@ -19,6 +19,8 @@ case ${NGU_VITA_LOGIC:-interpreter} in
         crate=clr
         profile=release
         panic_runtime=panic_abort
+        export CARGO_PROFILE_RELEASE_LTO="${CARGO_PROFILE_RELEASE_LTO:-thin}"
+        export CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${CARGO_PROFILE_RELEASE_CODEGEN_UNITS:-4}"
         ;;
     native)
         crate=ngu-gen
