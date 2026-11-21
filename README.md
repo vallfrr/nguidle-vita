@@ -41,6 +41,9 @@ reports render-loop rate, frame intervals, the longest controller poll and
 dispatch, and the time spent on simulation, layout, scene emission, texture uploads,
 draw submission and display sync. The display sampler counts framebuffer
 changes, repeats and missed samples against the hardware vertical blanks.
+The focus probe tracks a changed D-pad target from host dispatch to the
+first scanout of its buffer. It reports measurements over two refreshes
+and samples lost before scanout.
 The log also records simulation time, pending simulation time, CPU time
 for the game thread, and free memory both outside and inside vitaGL. Select
 writes a screenshot to `ux0:data/ngu/bench/shot.tga`. Each window reports the

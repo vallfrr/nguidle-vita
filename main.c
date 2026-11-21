@@ -31,7 +31,7 @@ int ngu_vita_init_native(const char *dir, int w, int h);
 #define ngu_init ngu_vita_init_native
 #endif
 void ngu_frame(float dt, float x, float y, int down);
-void ngu_pad(uint32_t action);
+int ngu_pad(uint32_t action);
 void ngu_scroll(float dx, float dy);
 int ngu_emit(void);
 uint32_t ngu_layout_us(void);
@@ -142,10 +142,24 @@ static unsigned g_frame_ms[251], g_frame_max, g_draws, g_shots;
 static unsigned g_input_max, g_pad_edges;
 static atomic_uint g_scanout_frames, g_scanout_repeats, g_scanout_errors, g_scanout_gaps;
 static atomic_uint g_display_callbacks;
+static atomic_uint g_focus_frame, g_focus_press_us;
+static atomic_uintptr_t g_focus_buffer;
+static atomic_uint g_focus_samples, g_focus_missed, g_focus_slow, g_focus_max_us;
 
 static void display_callback(void *base) {
-    (void)base;
+    static unsigned callback_frame;
+    unsigned frame = ++callback_frame;
     atomic_fetch_add_explicit(&g_display_callbacks, 1, memory_order_relaxed);
+    uintptr_t address = (uintptr_t)base;
+    uintptr_t pending = address;
+    if (atomic_compare_exchange_strong(&g_focus_buffer, &pending, 0)) {
+        // Reusing a buffer before the monitor has seen it makes that sample unusable.
+        atomic_fetch_add_explicit(&g_focus_missed, 1, memory_order_relaxed);
+        atomic_store_explicit(&g_focus_frame, 0, memory_order_release);
+    }
+    if (frame == atomic_load_explicit(&g_focus_frame, memory_order_acquire)) {
+        atomic_store_explicit(&g_focus_buffer, address, memory_order_release);
+    }
 }
 
 static int sample_display(SceSize args, void *argp) {
@@ -178,6 +192,15 @@ static int sample_display(SceSize args, void *argp) {
         }
         atomic_uint *samples = frame.base == previous ? &g_scanout_repeats : &g_scanout_frames;
         atomic_fetch_add_explicit(samples, 1, memory_order_relaxed);
+        uintptr_t address = (uintptr_t)frame.base;
+        if (frame.base != previous && atomic_compare_exchange_strong(&g_focus_buffer, &address, 0)) {
+            unsigned latency = (unsigned)now_us() - atomic_load(&g_focus_press_us);
+            atomic_fetch_add_explicit(&g_focus_samples, 1, memory_order_relaxed);
+            if (latency > 33367) atomic_fetch_add_explicit(&g_focus_slow, 1, memory_order_relaxed);
+            unsigned peak = atomic_load(&g_focus_max_us);
+            while (peak < latency && !atomic_compare_exchange_weak(&g_focus_max_us, &peak, latency)) {}
+            atomic_store_explicit(&g_focus_frame, 0, memory_order_release);
+        }
         previous = frame.base;
     }
 }
@@ -405,7 +428,17 @@ static void pad_update(const SceCtrlData *pad, uint64_t now, float dt, int enabl
     else if ((held & SCE_CTRL_LEFT) || pad->lx < 58) next = 'l';
     else if ((held & SCE_CTRL_RIGHT) || pad->lx > 198) next = 'r';
     if (next && (next != direction || now >= next_repeat)) {
+#ifdef NGU_VITA_BENCHMARK
+        unsigned start = (unsigned)now_us();
+        int moved = ngu_pad(next);
+        unsigned dpad = SCE_CTRL_UP | SCE_CTRL_DOWN | SCE_CTRL_LEFT | SCE_CTRL_RIGHT;
+        if (moved && (pressed & dpad) && !atomic_load_explicit(&g_focus_frame, memory_order_acquire)) {
+            atomic_store(&g_focus_press_us, start);
+            atomic_store_explicit(&g_focus_frame, g_frame_no + 1, memory_order_release);
+        }
+#else
         ngu_pad(next);
+#endif
         next_repeat = now + (next != direction ? 400000 : 120000);
     }
     direction = next;
@@ -477,6 +510,8 @@ static int game_thread(SceSize args, void *argp) {
     glGenBuffers(1, &g_vertex_buffer);
 #endif
 #ifdef NGU_VITA_BENCHMARK
+    // Finish the initialization swap before numbering gameplay queue callbacks.
+    sceGxmDisplayQueueFinish();
     vglSetDisplayCallback(display_callback);
     SceUID monitor = sceKernelCreateThread("ngu-display-sample", sample_display,
                                            0x10000100, 16 * 1024, 0, 0, NULL);
@@ -543,6 +578,14 @@ static int game_thread(SceSize args, void *argp) {
             previous_run_clocks = thread.runClocks;
             uint64_t debt_us = 0;
             uint64_t game_us = ngu_clock_us(&debt_us);
+            unsigned focus_samples = atomic_exchange(&g_focus_samples, 0);
+            unsigned focus_missed = atomic_exchange(&g_focus_missed, 0);
+            unsigned focus_slow = atomic_exchange(&g_focus_slow, 0);
+            unsigned focus_max = atomic_exchange(&g_focus_max_us, 0);
+            if (focus_samples || focus_missed) {
+                hlog("[focus] presented=%u over_two_refreshes=%u missed_samples=%u max_us=%u\n",
+                     focus_samples, focus_slow, focus_missed, focus_max);
+            }
             hlog("[perf] t=%.1fs fps=%.2f p50=%u p95=%u p99=%u max=%u input=%.2f input_max=%u pads=%u logic=%.2f layout=%.2f emit=%.2f draw=%.2f upload=%.2f swap=%.2f batches=%u textures=%d gpu_mb=%u shots=%u scanout=%u repeat=%u sample_errors=%u sample_gaps=%u gpu_submits=%u free_kib=%d/%d/%d heap_kib=%u/%u vgl_free_kib=%u/%u/%u thread=%d run_clocks=%llu core=%d affinity=%x game_us=%llu debt_us=%llu\n",
                 (end - load_start) / 1000000.0, fps_n * 1000000.0 / (end - fps_t),
                 percentile(fps_n, 50), percentile(fps_n, 95), percentile(fps_n, 99), g_frame_max,
