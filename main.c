@@ -17,7 +17,13 @@ typedef struct { float x, y, u, v; uint32_t rgba; } NguVertex;
 typedef struct { uint32_t tex, nearest; int32_t clip[4]; uint32_t first, count; } NguBatch;
 
 int ngu_init(const char *dir, int w, int h);
+#ifdef NGU_NATIVE_LOGIC
+int ngu_vita_init_native(const char *dir, int w, int h);
+#define ngu_init ngu_vita_init_native
+#endif
 void ngu_frame(float dt, float x, float y, int down);
+void ngu_pad(uint32_t action);
+void ngu_scroll(float dx, float dy);
 int ngu_emit(void);
 const NguBatch *ngu_batches(void);
 const NguVertex *ngu_vertices(void);
@@ -157,7 +163,7 @@ static void utf16_to_utf8(const uint16_t *s, char *d, int cap) {
     d[n] = 0;
 }
 
-static void ime_start(const char *init, int max) {
+static void ime_start(const char *init, int max, int numeric) {
     SceImeDialogParam p;
     sceImeDialogParamInit(&p);
     utf8_to_utf16("NGU Idle", g_ime_title, 32);
@@ -165,7 +171,7 @@ static void ime_start(const char *init, int max) {
     memset(g_ime_buf, 0, sizeof g_ime_buf);
     p.supportedLanguages = 0x0001FFFF;
     p.languagesForced = SCE_TRUE;
-    p.type = 0;
+    p.type = numeric ? SCE_IME_TYPE_EXTENDED_NUMBER : SCE_IME_TYPE_DEFAULT;
     p.option = 0;
     p.dialogMode = SCE_IME_DIALOG_DIALOG_MODE_WITH_CANCEL;
     p.textBoxMode = SCE_IME_DIALOG_TEXTBOX_MODE_WITH_CLEAR;
@@ -251,12 +257,51 @@ static void draw_frame(void) {
     g_t_draw += (now_us() - t1) / 1000.0;
 }
 
+static float axis(uint8_t value) {
+    float normalized = (value - 128.0f) / 128.0f;
+    if (normalized > 0.22f) return (normalized - 0.22f) / 0.78f;
+    if (normalized < -0.22f) return (normalized + 0.22f) / 0.78f;
+    return 0.0f;
+}
+
+static void pad_update(const SceCtrlData *pad, uint64_t now, float dt, int enabled) {
+    static uint32_t previous;
+    static char direction;
+    static uint64_t next_repeat;
+    uint32_t pressed = pad->buttons & ~previous;
+    previous = pad->buttons;
+    if (!enabled) {
+        direction = 0;
+        return;
+    }
+    if (pressed & SCE_CTRL_CROSS) ngu_pad('a');
+    else if (pressed & SCE_CTRL_CIRCLE) ngu_pad('b');
+    else if (pressed & SCE_CTRL_LTRIGGER) ngu_pad('p');
+    else if (pressed & SCE_CTRL_RTRIGGER) ngu_pad('n');
+
+    uint32_t held = pad->buttons;
+    char next = 0;
+    if ((held & SCE_CTRL_UP) || pad->ly < 58) next = 'u';
+    else if ((held & SCE_CTRL_DOWN) || pad->ly > 198) next = 'd';
+    else if ((held & SCE_CTRL_LEFT) || pad->lx < 58) next = 'l';
+    else if ((held & SCE_CTRL_RIGHT) || pad->lx > 198) next = 'r';
+    if (next && (next != direction || now >= next_repeat)) {
+        ngu_pad(next);
+        next_repeat = now + (next != direction ? 400000 : 120000);
+    }
+    direction = next;
+    float dx = -axis(pad->rx), dy = axis(pad->ry);
+    float distance = 390.0f * (dt < 0.1f ? dt : 0.1f);
+    if (dx || dy) ngu_scroll(dx * distance, dy * distance);
+}
+
 static int game_thread(SceSize args, void *argp) {
     (void)args; (void)argp;
     sceIoMkdir(DATA_DIR, 0777);
     remove(LOG_FILE);
     hlog("[host] demarrage\n");
     sceTouchSetSamplingState(SCE_TOUCH_PORT_FRONT, SCE_TOUCH_SAMPLING_STATE_START);
+    sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
     scePowerSetArmClockFrequency(333);
     scePowerSetGpuClockFrequency(166);
     scePowerSetBusClockFrequency(222);
@@ -298,7 +343,7 @@ static int game_thread(SceSize args, void *argp) {
     float tx = 0, ty = 0;
     int down = 0;
     for (;;) {
-        SceTouchData td;
+        SceTouchData td = {0};
         sceTouchPeek(SCE_TOUCH_PORT_FRONT, &td, 1);
         if (td.reportNum > 0) {
             tx = td.report[0].x / 2.0f;
@@ -311,16 +356,18 @@ static int game_thread(SceSize args, void *argp) {
         float dt = (now - prev) / 1000000.0f;
         prev = now;
         uint64_t tl = now_us();
+        SceCtrlData pad = {.lx = 128, .ly = 128, .rx = 128, .ry = 128};
+        sceCtrlPeekBufferPositive(0, &pad, 1);
+        pad_update(&pad, now, dt, !g_ime_active && !down);
         if (!g_ime_active) ngu_frame(dt, tx, ty, down);
         g_t_logic += (now_us() - tl) / 1000.0;
-        { SceCtrlData pad; sceCtrlPeekBufferPositive(0, &pad, 1);
-          static int sel_prev; int sel = (pad.buttons & SCE_CTRL_SELECT) != 0;
+        { static int sel_prev; int sel = (pad.buttons & SCE_CTRL_SELECT) != 0;
           if ((sel && !sel_prev) || g_frames == 150) g_want_shot = 1;
           sel_prev = sel; g_frames++; }
         draw_frame();
         if (!g_ime_active) {
             char tb[300]; int tmax = 0, tnum = 0;
-            if (ngu_text_request(tb, sizeof tb, &tmax, &tnum)) ime_start(tb, tmax);
+            if (ngu_text_request(tb, sizeof tb, &tmax, &tnum)) ime_start(tb, tmax, tnum);
         } else {
             ime_poll();
         }

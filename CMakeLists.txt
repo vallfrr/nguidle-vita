@@ -9,13 +9,20 @@ include("$ENV{VITASDK}/share/vita.cmake" REQUIRED)
 
 set(VITA_APP_NAME "NGU Idle")
 set(VITA_TITLEID "NGUI00001")
-set(VITA_VERSION "01.00")
+set(VITA_VERSION "01.01")
 
-set(NGU_RUST_LIB "$ENV{HOME}/build/clr-vita/armv7-sony-vita-newlibeabihf/release/libclr.a" CACHE FILEPATH "libclr.a (Rust)")
+set(NGU_RUST_LIB "" CACHE FILEPATH "Rust game archive")
+option(NGU_NATIVE_LOGIC "Use translated game logic" OFF)
+if(NOT EXISTS "${NGU_RUST_LIB}")
+  message(FATAL_ERROR "Set NGU_RUST_LIB to a built Rust game archive")
+endif()
 set(NGU_VGL_LIB "$ENV{VITASDK}/arm-vita-eabi/lib/libvitaGL.a.orig" CACHE FILEPATH "vitaGL")
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,-q -O2 -g -std=gnu11")
 add_executable(ngu main.c stubs.c)
+if(NGU_NATIVE_LOGIC)
+  target_compile_definitions(ngu PRIVATE NGU_NATIVE_LOGIC)
+endif()
 target_link_libraries(ngu
   ${NGU_RUST_LIB}
   ${NGU_VGL_LIB} vitashark SceShaccCgExt mathneon taihen_stub
