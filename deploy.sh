@@ -4,8 +4,12 @@ set -euo pipefail
 source_dir=$(cd "$(dirname "$0")" && pwd)
 engine=${NGUIDLE_RUST:-$(dirname "$source_dir")}
 build=${NGU_VITA_BUILD_DIR:-"$engine/out/vita"}
+package="$build/ngu.vpk"
 agent() { bash "${VITA_AGENT:?Set VITA_AGENT to your local Vita agent wrapper}" "$@"; }
-python3 "$source_dir/.claude/skills/vita-port/scripts/check_vpk.py" "$build/ngu.vpk"
+python3 "$source_dir/.claude/skills/vita-port/scripts/check_vpk.py" "$package"
+digest=$(sha256sum < "$package")
+# Keep previously verified agent uploads tied to the same package contents.
+remote="ux0:data/ngu/ngu-${digest:0:16}.vpk"
 running=$(agent app running | python3 -c 'import json, sys
 reply = json.load(sys.stdin)
 if reply.get("status") != "ok":
@@ -19,8 +23,8 @@ esac
 if [ "${1:-}" = pak ]; then
     agent fs upload "${NGU_VITA_PAK:-"$build/ngu.pak"}" ux0:data/ngu/ngu.pak --overwrite
 fi
-agent fs upload "$build/ngu.vpk" ux0:data/ngu/ngu.vpk --overwrite
-agent app install ux0:data/ngu/ngu.vpk --yes --timeout 90 | python3 -c 'import sys,json
+agent fs upload "$package" "$remote" --overwrite
+agent app install "$remote" --yes --timeout 90 | python3 -c 'import sys,json
 reply=json.load(sys.stdin)
 print(json.dumps(reply))
 if not reply.get("result",{}).get("installed"):

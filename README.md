@@ -45,6 +45,8 @@ Install the VPK and copy `ngu.pak` to `ux0:data/ngu/ngu.pak`. The VPK contains
 only the engine and LiveArea assets. With a configured Vita agent, set
 `VITA_AGENT` to the local wrapper and use `bash nguidle-vita/deploy.sh`.
 Pass `pak` if you also want to deploy the prepared data.
+The deployment script names each uploaded VPK by its content hash. Old VPKs
+can be removed from `ux0:data/ngu/` after installation to reclaim space.
 
 ## Older Vita saves
 
