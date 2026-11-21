@@ -13,6 +13,7 @@ export CARGO_TARGET_ARMV7_SONY_VITA_NEWLIBEABIHF_LINKER=arm-vita-eabi-gcc
 export CC_armv7_sony_vita_newlibeabihf=arm-vita-eabi-gcc
 export AR_armv7_sony_vita_newlibeabihf=arm-vita-eabi-ar
 cd "$engine"
+configuration=()
 case ${NGU_VITA_LOGIC:-interpreter} in
     interpreter)
         crate=clr
@@ -27,11 +28,15 @@ case ${NGU_VITA_LOGIC:-interpreter} in
             echo 'Generate the game code using the Rust project first.' >&2
             exit 1
         fi
+        if [ "${NGU_VITA_NATIVE_OPT:-0}" = 1 ]; then
+            configuration+=(--config 'profile.game.package.ngu-gen.opt-level=1'
+                --config 'profile.game.package.ngu-gen.codegen-units=128' -j2)
+        fi
         ;;
     *)
         echo 'NGU_VITA_LOGIC must be interpreter or native.' >&2
         exit 2
         ;;
 esac
-bash tools/capbuild.sh "${NGU_VITA_BUILD_MEMORY_GB:-12}" cargo build --locked --profile "$profile" \
+bash tools/capbuild.sh "${NGU_VITA_BUILD_MEMORY_GB:-12}" cargo build "${configuration[@]}" --locked --profile "$profile" \
     --package "$crate" --lib --target "$target" -Z "build-std=std,$panic_runtime"

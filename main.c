@@ -1,5 +1,6 @@
 // NGU Idle PS Vita: C host (vitaGL + touch) around the Rust library `clr`.
 #include <stdint.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,9 +8,15 @@
 #include <vitaGL.h>
 
 #define DATA_DIR "ux0:data/ngu"
-#define LOG_FILE DATA_DIR "/host.txt"
+#ifdef NGU_VITA_BENCHMARK
+#define PROFILE_DIR DATA_DIR "/bench"
+#else
+#define PROFILE_DIR DATA_DIR
+#endif
+#define LOG_FILE PROFILE_DIR "/host.txt"
 #define HEAP_MB 170
 #define VGL_RAM_MB 24
+#define SYSTEM_RAM_MB 4
 
 int _newlib_heap_size_user = HEAP_MB * 1024 * 1024;
 
@@ -45,14 +52,26 @@ static void hlog(const char *fmt, ...) {
 #define MAX_TEX 8192
 static GLuint g_tex[MAX_TEX];
 static GLuint g_white, g_atlas;
+#ifdef NGU_VITA_VERTEX_BUFFER
+static GLuint g_vertex_buffer;
+#endif
 static int g_atlas_size;
+static GLuint g_bound_texture;
+static uint8_t g_filter[MAX_TEX];
+
+static void bind_texture(GLuint texture) {
+    if (texture != g_bound_texture) {
+        glBindTexture(GL_TEXTURE_2D, texture);
+        g_bound_texture = texture;
+    }
+}
 
 static void upload_atlas(void) {
     int dirty = 0;
     uint32_t size = 0;
     const uint8_t *px = ngu_atlas(&dirty, &size);
-    if (!px) return;
-    glBindTexture(GL_TEXTURE_2D, g_atlas);
+    if (!px || (g_atlas_size && !dirty)) return;
+    bind_texture(g_atlas);
     if (!g_atlas_size) {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
         g_atlas_size = size;
@@ -78,8 +97,10 @@ static void evict_for(uint32_t need) {
             if (g_tex[i] && g_tex_use[i] + 2 < g_frame_no && g_tex_use[i] < bu) { bu = g_tex_use[i]; best = i; }
         }
         if (best < 0) return; // everything is used in the current frame
+        if (g_bound_texture == g_tex[best]) bind_texture(0);
         glDeleteTextures(1, &g_tex[best]);
         g_tex[best] = 0;
+        g_filter[best] = 0;
         g_tex_total -= g_tex_size[best];
         g_tex_count--;
     }
@@ -95,7 +116,7 @@ static GLuint get_tex(uint32_t id) {
         if (!px) return g_white;
         evict_for(w * h * 4);
         glGenTextures(1, &g_tex[id]);
-        glBindTexture(GL_TEXTURE_2D, g_tex[id]);
+        bind_texture(g_tex[id]);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -108,8 +129,25 @@ static GLuint get_tex(uint32_t id) {
     return g_tex[id];
 }
 
-static double g_t_emit, g_t_draw, g_t_logic;
 static uint64_t now_us(void) { return sceKernelGetProcessTimeWide(); }
+
+#ifdef NGU_VITA_BENCHMARK
+#define PERF(code) code
+static uint64_t g_t_emit, g_t_draw, g_t_swap, g_t_logic, g_t_upload;
+static unsigned g_frame_ms[251], g_frame_max, g_draws, g_shots;
+
+static unsigned percentile(unsigned total, unsigned percent) {
+    unsigned target = (total * percent + 99) / 100;
+    unsigned seen = 0;
+    for (unsigned ms = 0; ms < sizeof g_frame_ms / sizeof g_frame_ms[0]; ms++) {
+        seen += g_frame_ms[ms];
+        if (seen >= target) return ms;
+    }
+    return 0;
+}
+#else
+#define PERF(code)
+#endif
 
 static void save_shot(const char *path) {
     static uint8_t buf[960 * 544 * 4];
@@ -130,7 +168,7 @@ static void save_shot(const char *path) {
     hlog("[host] capture %s\n", path);
 }
 
-static int g_want_shot, g_frames;
+static int g_want_shot;
 
 
 // ---------------------------------------------------------------- system keyboard (IME)
@@ -201,16 +239,8 @@ static void ime_poll(void) {
     }
 }
 
-static void draw_frame(void) {
-    g_frame_no++;
-    uint64_t t0 = now_us();
-    int nb = ngu_emit();
-    uint64_t t1 = now_us();
-    g_t_emit += (t1 - t0) / 1000.0;
-    const NguBatch *b = ngu_batches();
-    const NguVertex *v = ngu_vertices();
+static void setup_draw_state(void) {
     glClearColor(0, 0, 0, 1);
-    glClear(GL_COLOR_BUFFER_BIT);
     glViewport(0, 0, 960, 544);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
@@ -222,39 +252,73 @@ static void draw_frame(void) {
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
-    glEnable(GL_SCISSOR_TEST);
     glEnableClientState(GL_VERTEX_ARRAY);
     glEnableClientState(GL_TEXTURE_COORD_ARRAY);
     glEnableClientState(GL_COLOR_ARRAY);
-    glVertexPointer(2, GL_FLOAT, sizeof(NguVertex), &v[0].x);
-    glTexCoordPointer(2, GL_FLOAT, sizeof(NguVertex), &v[0].u);
-    glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(NguVertex), &v[0].rgba);
+}
+
+static void draw_frame(void) {
+    g_frame_no++;
+    PERF(uint64_t t0 = now_us());
+    int nb = ngu_emit();
+    PERF(uint64_t t1 = now_us());
+    PERF(g_t_emit += t1 - t0);
+    PERF(g_draws += nb);
+    const NguBatch *b = ngu_batches();
+    const NguVertex *v = ngu_vertices();
+    glDisable(GL_SCISSOR_TEST);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_SCISSOR_TEST);
+    if (nb > 0) {
+#ifdef NGU_VITA_VERTEX_BUFFER
+        glBindBuffer(GL_ARRAY_BUFFER, g_vertex_buffer);
+        size_t count = b[nb - 1].first + b[nb - 1].count;
+        glBufferData(GL_ARRAY_BUFFER, count * sizeof(NguVertex), v, GL_STREAM_DRAW);
+        glVertexPointer(2, GL_FLOAT, sizeof(NguVertex), (const void *)offsetof(NguVertex, x));
+        glTexCoordPointer(2, GL_FLOAT, sizeof(NguVertex), (const void *)offsetof(NguVertex, u));
+        glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(NguVertex), (const void *)offsetof(NguVertex, rgba));
+#else
+        glVertexPointer(2, GL_FLOAT, sizeof(NguVertex), &v[0].x);
+        glTexCoordPointer(2, GL_FLOAT, sizeof(NguVertex), &v[0].u);
+        glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(NguVertex), &v[0].rgba);
+#endif
+    }
+    PERF(uint64_t before_atlas = now_us());
     upload_atlas();
-    uint32_t last = 0xFFFFFFFF, last_n = 0xFFFFFFFF;
+    PERF(g_t_upload += now_us() - before_atlas);
+    int32_t last_clip[4] = {-1, -1, -1, -1};
     for (int i = 0; i < nb; i++) {
-        GLuint t = get_tex(b[i].tex);
-        if (b[i].tex != last) {
-            glBindTexture(GL_TEXTURE_2D, t);
-            last = b[i].tex;
-            last_n = 0xFFFFFFFF;
-        }
-        if (b[i].nearest != last_n) {
-            GLint f = b[i].nearest ? GL_NEAREST : GL_LINEAR;
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, f);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, f);
-            last_n = b[i].nearest;
-        }
         int x0 = b[i].clip[0] < 0 ? 0 : b[i].clip[0];
         int y0 = b[i].clip[1] < 0 ? 0 : b[i].clip[1];
         int x1 = b[i].clip[2] > 960 ? 960 : b[i].clip[2];
         int y1 = b[i].clip[3] > 544 ? 544 : b[i].clip[3];
         if (x1 <= x0 || y1 <= y0) continue;
-        glScissor(x0, 544 - y1, x1 - x0, y1 - y0);
+        uint32_t id = b[i].tex;
+        GLuint texture = get_tex(id);
+        bind_texture(texture);
+        if (texture == g_white) id = 0;
+        uint8_t filter = b[i].nearest ? 2 : 1;
+        if (g_filter[id] != filter) {
+            GLint mode = b[i].nearest ? GL_NEAREST : GL_LINEAR;
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, mode);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, mode);
+            g_filter[id] = filter;
+        }
+        if (last_clip[0] != x0 || last_clip[1] != y0 || last_clip[2] != x1 || last_clip[3] != y1) {
+            glScissor(x0, 544 - y1, x1 - x0, y1 - y0);
+            last_clip[0] = x0; last_clip[1] = y0; last_clip[2] = x1; last_clip[3] = y1;
+        }
         glDrawArrays(GL_TRIANGLES, b[i].first, b[i].count);
     }
-    if (g_want_shot) { save_shot(DATA_DIR "/shot.tga"); g_want_shot = 0; }
+    PERF(g_t_draw += now_us() - t1);
+    if (g_want_shot) {
+        save_shot(PROFILE_DIR "/shot.tga");
+        g_want_shot = 0;
+        PERF(g_shots++);
+    }
+    PERF(uint64_t before_swap = now_us());
     vglSwapBuffers(g_ime_active ? GL_TRUE : GL_FALSE);
-    g_t_draw += (now_us() - t1) / 1000.0;
+    PERF(g_t_swap += now_us() - before_swap);
 }
 
 static float axis(uint8_t value) {
@@ -298,25 +362,41 @@ static void pad_update(const SceCtrlData *pad, uint64_t now, float dt, int enabl
 static int game_thread(SceSize args, void *argp) {
     (void)args; (void)argp;
     sceIoMkdir(DATA_DIR, 0777);
+#ifdef NGU_VITA_BENCHMARK
+    sceIoMkdir(PROFILE_DIR, 0777);
+    if (setenv("NGU_VITA_SAVE_DIR", PROFILE_DIR "/save", 1) != 0) return 1;
+#ifdef NGU_VITA_PROFILE
+    setenv("NGU_VITA_PROFILE", "1", 1);
+#endif
+#endif
     remove(LOG_FILE);
-    hlog("[host] demarrage\n");
+    hlog("[host] Starting %s\n", PROFILE_DIR);
     sceTouchSetSamplingState(SCE_TOUCH_PORT_FRONT, SCE_TOUCH_SAMPLING_STATE_START);
     sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
+#ifdef NGU_VITA_FAST_CLOCKS
+    scePowerSetArmClockFrequency(444);
+    scePowerSetGpuClockFrequency(222);
+#else
     scePowerSetArmClockFrequency(333);
     scePowerSetGpuClockFrequency(166);
+#endif
     scePowerSetBusClockFrequency(222);
     scePowerSetGpuXbarClockFrequency(166);
+    hlog("[host] Clocks CPU=%d MHz GPU=%d MHz\n", scePowerGetArmClockFrequency(), scePowerGetGpuClockFrequency());
 
     SceKernelFreeMemorySizeInfo info = {.size = sizeof info};
     sceKernelGetFreeMemorySize(&info);
-    hlog("[host] RAM utilisateur libre: %d Mo\n", (int)(info.size_user >> 20));
-    int threshold = (int)info.size_user - (VGL_RAM_MB << 20);
+    hlog("[host] Free user RAM before initialization: %d MiB\n", (int)(info.size_user >> 20));
+    int free_ram = (int)info.size_user;
+    int threshold = free_ram - (VGL_RAM_MB << 20);
+    if (threshold < (SYSTEM_RAM_MB << 20)) threshold = SYSTEM_RAM_MB << 20;
+    if (threshold > free_ram) threshold = free_ram;
     vglInitExtended(0, 960, 544, threshold, SCE_GXM_MULTISAMPLE_NONE);
     vglWaitVblankStart(GL_TRUE);
 
     uint8_t one[4] = {255, 255, 255, 255};
     glGenTextures(1, &g_white);
-    glBindTexture(GL_TEXTURE_2D, g_white);
+    bind_texture(g_white);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, one);
     glGenTextures(1, &g_atlas);
 
@@ -325,8 +405,9 @@ static int game_thread(SceSize args, void *argp) {
     glClear(GL_COLOR_BUFFER_BIT);
     vglSwapBuffers(GL_FALSE);
 
+    uint64_t load_start = now_us();
     int r = ngu_init(DATA_DIR, 960, 544);
-    hlog("[host] ngu_init -> %d\n", r);
+    hlog("[host] ngu_init -> %d in %llu ms\n", r, (unsigned long long)((now_us() - load_start) / 1000));
     if (r != 0) {
         for (;;) {
             glClearColor(0.5f, 0, 0, 1);
@@ -335,11 +416,16 @@ static int game_thread(SceSize args, void *argp) {
         }
     }
     sceKernelGetFreeMemorySize(&info);
-    hlog("[host] apres init: RAM libre %d Mo\n", (int)(info.size_user >> 20));
+    hlog("[host] Free user RAM after initialization: %d MiB\n", (int)(info.size_user >> 20));
+    setup_draw_state();
+#ifdef NGU_VITA_VERTEX_BUFFER
+    glGenBuffers(1, &g_vertex_buffer);
+#endif
 
     uint64_t prev = sceKernelGetProcessTimeWide();
-    uint64_t fps_t = prev;
-    int fps_n = 0;
+    PERF(uint64_t fps_t = prev);
+    PERF(uint64_t last_present = prev);
+    PERF(int fps_n = 0);
     float tx = 0, ty = 0;
     int down = 0;
     for (;;) {
@@ -355,15 +441,15 @@ static int game_thread(SceSize args, void *argp) {
         uint64_t now = sceKernelGetProcessTimeWide();
         float dt = (now - prev) / 1000000.0f;
         prev = now;
-        uint64_t tl = now_us();
+        PERF(uint64_t tl = now_us());
         SceCtrlData pad = {.lx = 128, .ly = 128, .rx = 128, .ry = 128};
         sceCtrlPeekBufferPositive(0, &pad, 1);
         pad_update(&pad, now, dt, !g_ime_active && !down);
         if (!g_ime_active) ngu_frame(dt, tx, ty, down);
-        g_t_logic += (now_us() - tl) / 1000.0;
+        PERF(g_t_logic += now_us() - tl);
         { static int sel_prev; int sel = (pad.buttons & SCE_CTRL_SELECT) != 0;
-          if ((sel && !sel_prev) || g_frames == 150) g_want_shot = 1;
-          sel_prev = sel; g_frames++; }
+          if (sel && !sel_prev) g_want_shot = 1;
+          sel_prev = sel; }
         draw_frame();
         if (!g_ime_active) {
             char tb[300]; int tmax = 0, tnum = 0;
@@ -371,13 +457,27 @@ static int game_thread(SceSize args, void *argp) {
         } else {
             ime_poll();
         }
+#ifdef NGU_VITA_BENCHMARK
+        uint64_t end = now_us();
+        unsigned ms = (unsigned)((end - last_present + 999) / 1000);
+        last_present = end;
+        g_frame_ms[ms > 250 ? 250 : ms]++;
+        if (ms > g_frame_max) g_frame_max = ms;
         fps_n++;
-        if (now - fps_t > 5000000) {
-            hlog("[host] %.2f img/s | logique %.0f ms, emit %.0f ms, dessin %.0f ms | textures GPU: %d (%u Mo)\n", fps_n * 1000000.0f / (now - fps_t), g_t_logic / fps_n, g_t_emit / fps_n, g_t_draw / fps_n, g_tex_count, g_tex_total >> 20);
-            g_t_logic = g_t_emit = g_t_draw = 0;
-            fps_t = now;
+        if (end - fps_t >= 5000000) {
+            float to_ms = 0.001f / fps_n;
+            hlog("[perf] t=%.1fs fps=%.2f p50=%u p95=%u p99=%u max=%u logic=%.2f emit=%.2f draw=%.2f upload=%.2f swap=%.2f batches=%u textures=%d gpu_mb=%u shots=%u\n",
+                (end - load_start) / 1000000.0, fps_n * 1000000.0 / (end - fps_t),
+                percentile(fps_n, 50), percentile(fps_n, 95), percentile(fps_n, 99), g_frame_max,
+                g_t_logic * to_ms, g_t_emit * to_ms, g_t_draw * to_ms, g_t_upload * to_ms, g_t_swap * to_ms,
+                g_draws / fps_n, g_tex_count, g_tex_total >> 20, g_shots);
+            g_t_logic = g_t_emit = g_t_draw = g_t_upload = g_t_swap = 0;
+            memset(g_frame_ms, 0, sizeof g_frame_ms);
+            g_frame_max = g_draws = g_shots = 0;
+            fps_t = end;
             fps_n = 0;
         }
+#endif
     }
     return 0;
 }

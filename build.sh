@@ -17,7 +17,11 @@ else
     native=OFF
 fi
 cmake -S "$source_dir" -B "$build" -DCMAKE_BUILD_TYPE=Release \
-    -DNGU_RUST_LIB="$archive" -DNGU_NATIVE_LOGIC="$native"
+    -DNGU_RUST_LIB="$archive" -DNGU_NATIVE_LOGIC="$native" \
+    -DNGU_VITA_BENCHMARK="${NGU_VITA_BENCHMARK:-OFF}" \
+    -DNGU_VITA_PROFILE="${NGU_VITA_PROFILE:-OFF}" \
+    -DNGU_VITA_FAST_CLOCKS="${NGU_VITA_FAST_CLOCKS:-ON}" \
+    -DNGU_VITA_VERTEX_BUFFER="${NGU_VITA_VERTEX_BUFFER:-ON}"
 cmake --build "$build" -j4
 python3 "$source_dir/.claude/skills/vita-port/scripts/check_vpk.py" "$build/ngu.vpk"
 printf 'VPK: %s\n' "$build/ngu.vpk"

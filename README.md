@@ -32,6 +32,26 @@ NGU_VITA_LOGIC=native NGU_VITA_BUILD_DIR="$PWD/out/vita-native" bash nguidle-vit
 `VITASDK` defaults to `$HOME/vitasdk`. Set `NGUIDLE_RUST` if the engine resides
 elsewhere. Both builds verify the VPK headers and LiveArea PNG format.
 
+## Benchmark on a console
+
+Use `NGU_VITA_BENCHMARK=ON` when building the VPK. The benchmark reads and
+writes saves under `ux0:data/ngu/bench/save/`. Copy a test autosave there
+before launching the benchmark. Every five seconds, `ux0:data/ngu/bench/host.txt`
+reports frame rate, the median and 95th/99th percentile frame intervals (ms),
+and the time spent on logic, scene emission, drawing and display sync. Select
+writes a screenshot to `ux0:data/ngu/bench/shot.tga`. Each window reports the
+number of screenshots taken so those windows can be excluded from timing
+comparisons.
+
+`NGU_VITA_PROFILE=ON` records slow game callbacks in `ux0:data/ngu/log.txt`.
+Use the default `OFF` for frame-rate comparisons. The default build requests
+444 MHz CPU and 222 MHz GPU clocks and streams one vertex buffer per frame.
+For comparisons, `NGU_VITA_FAST_CLOCKS=OFF` requests 333 MHz and 166 MHz,
+and `NGU_VITA_VERTEX_BUFFER=OFF` uses client vertex arrays. The startup log
+records the actual clocks. `NGU_VITA_NATIVE_OPT=1` enables an experimental
+translated build profile. It exceeded the default 12 GiB compiler memory cap
+in the full-game build.
+
 ## Prepare and install your data
 
 Verify and extract your Steam Windows 1.260 data using the Rust project's
@@ -66,8 +86,10 @@ file as an autosave or copy it to a numbered slot.
 The interpreter VPK has run on a console. The smoke test opened the slot
 picker with the D-pad and Cross, then used touch to load a converted legacy
 autosave and enter Basic Training. The game wrote a subsequent autosave.
-The generated-Rust VPK also installed and loaded an autosave. Its initial
-frame pacing and free memory favor the interpreter for current play. See the
+The benchmark also verified right-stick scrolling, touch inventory dragging
+and saving and loading numbered slots. The generated-Rust VPK reached Basic
+Training on the same advanced save. The interpreter had more free memory at
+startup and presented more frames per second in that test. See the
 [engine status](https://github.com/vallfrr/nguidle-rust/blob/main/docs/STATUS.md)
 for the latest device results and remaining tests.
 

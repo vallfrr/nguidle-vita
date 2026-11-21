@@ -13,6 +13,10 @@ set(VITA_VERSION "01.01")
 
 set(NGU_RUST_LIB "" CACHE FILEPATH "Rust game archive")
 option(NGU_NATIVE_LOGIC "Use translated game logic" OFF)
+option(NGU_VITA_BENCHMARK "Benchmark with an isolated save directory" OFF)
+option(NGU_VITA_PROFILE "Log individual slow game callbacks in benchmark builds" OFF)
+option(NGU_VITA_FAST_CLOCKS "Use 444 MHz CPU and 222 MHz GPU clocks" ON)
+option(NGU_VITA_VERTEX_BUFFER "Upload one streamed vertex buffer per frame" ON)
 if(NOT EXISTS "${NGU_RUST_LIB}")
   message(FATAL_ERROR "Set NGU_RUST_LIB to a built Rust game archive")
 endif()
@@ -28,6 +32,18 @@ add_executable(ngu main.c stubs.c)
 if(NGU_NATIVE_LOGIC)
   target_compile_definitions(ngu PRIVATE NGU_NATIVE_LOGIC)
 endif()
+if(NGU_VITA_BENCHMARK)
+  target_compile_definitions(ngu PRIVATE NGU_VITA_BENCHMARK)
+endif()
+if(NGU_VITA_PROFILE)
+  target_compile_definitions(ngu PRIVATE NGU_VITA_PROFILE)
+endif()
+if(NGU_VITA_FAST_CLOCKS)
+  target_compile_definitions(ngu PRIVATE NGU_VITA_FAST_CLOCKS)
+endif()
+if(NGU_VITA_VERTEX_BUFFER)
+  target_compile_definitions(ngu PRIVATE NGU_VITA_VERTEX_BUFFER)
+endif()
 target_link_libraries(ngu
   ${NGU_RUST_LIB}
   ${NGU_VGL_LIB} vitashark SceShaccCgExt mathneon taihen_stub
@@ -35,7 +51,8 @@ target_link_libraries(ngu
   SceAppMgr_stub SceKernelThreadMgr_stub SceLibKernel_stub SceIofilemgr_stub SceProcessmgr_stub
   SceRtc_stub ScePower_stub SceShaccCg_stub SceIme_stub SceKernelDmacMgr_stub
   pthread stdc++ m z)
-target_link_options(ngu PRIVATE -Wl,--allow-multiple-definition)
+# Leave space for the SCE module metadata appended by vita-elf-create.
+target_link_options(ngu PRIVATE -Wl,--allow-multiple-definition -Wl,--defsym=__sce_headroom=0x4000)
 
 vita_create_self(eboot.bin ngu)
 vita_create_vpk(ngu.vpk ${VITA_TITLEID} eboot.bin
