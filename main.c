@@ -42,6 +42,8 @@ const uint8_t *ngu_atlas(int *dirty, uint32_t *size);
 int ngu_text_request(char *buf, int cap, int *max, int *numeric);
 void ngu_text_submit(const char *text, int ok);
 uint64_t ngu_clock_us(uint64_t *debt_us);
+int ngu_autoplay_load(const char *path);
+void ngu_frame_info(uint32_t *out);
 
 static void hlog(const char *fmt, ...) {
     FILE *f = fopen(LOG_FILE, "a");
@@ -160,6 +162,65 @@ static void display_callback(void *base) {
     if (frame == atomic_load_explicit(&g_focus_frame, memory_order_acquire)) {
         atomic_store_explicit(&g_focus_buffer, address, memory_order_release);
     }
+}
+
+// Per-frame trace (docs/VITA-60.md): 16 u32 per frame, written in chunks by a worker thread so the game thread never waits on storage.
+// Fields: frame, t_us, work_us (no swap wait), logic, layout, emit, draw, swap, upload, tick, steps, instr, menu, action, marks, flags.
+#define TRACE_CHUNK 2048
+typedef struct { uint32_t f[16]; } TraceRec;
+static TraceRec g_trace_buf[2][TRACE_CHUNK];
+static int g_trace_n, g_trace_cur, g_trace_on, g_trace_ready_n;
+static volatile int g_trace_ready = -1;
+static unsigned g_trace_dropped;
+static SceUID g_trace_sema = -1, g_trace_fd = -1;
+
+static int trace_writer(SceSize args, void *argp) {
+    (void)args; (void)argp;
+    for (;;) {
+        sceKernelWaitSema(g_trace_sema, 1, NULL);
+        int idx = g_trace_ready;
+        if (idx >= 0) {
+            sceIoWrite(g_trace_fd, g_trace_buf[idx], g_trace_ready_n * sizeof(TraceRec));
+            g_trace_ready = -1;
+        }
+    }
+    return 0;
+}
+
+static void trace_start(void) {
+    g_trace_fd = sceIoOpen(PROFILE_DIR "/trace.bin", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777);
+    g_trace_sema = sceKernelCreateSema("ngu-trace", 0, 0, 1, NULL);
+    SceUID th = sceKernelCreateThread("ngu-trace", trace_writer, 0x10000100, 16 * 1024, 0, 0, NULL);
+    if (g_trace_fd < 0 || g_trace_sema < 0 || th < 0) { hlog("[trace] cannot start\n"); return; }
+    uint32_t head[2] = {0x5455474eu /* NGUT */, 0};
+    sceIoWrite(g_trace_fd, head, sizeof head);
+    sceKernelStartThread(th, 0, NULL);
+    g_trace_on = 1;
+}
+
+static void trace_push(const TraceRec *r) {
+    if (!g_trace_on) return;
+    g_trace_buf[g_trace_cur][g_trace_n++] = *r;
+    if (g_trace_n < TRACE_CHUNK) return;
+    if (g_trace_ready >= 0) { g_trace_dropped++; g_trace_n = 0; return; } // writer behind: this chunk is lost, counted
+    g_trace_ready_n = g_trace_n;
+    g_trace_ready = g_trace_cur;
+    g_trace_cur ^= 1;
+    g_trace_n = 0;
+    sceKernelSignalSema(g_trace_sema, 1);
+}
+
+static void trace_finish(void) {
+    if (!g_trace_on) return;
+    g_trace_on = 0;
+    while (g_trace_ready >= 0) sceKernelDelayThread(1000);
+    sceIoWrite(g_trace_fd, g_trace_buf[g_trace_cur], g_trace_n * sizeof(TraceRec));
+    sceIoClose(g_trace_fd);
+    SceUID d = sceIoOpen(PROFILE_DIR "/done.txt", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777);
+    char msg[64];
+    int n = snprintf(msg, sizeof msg, "done dropped_chunks=%u\n", g_trace_dropped);
+    if (d >= 0) { sceIoWrite(d, msg, n); sceIoClose(d); }
+    hlog("[trace] finished, dropped chunks=%u\n", g_trace_dropped);
 }
 
 static int sample_display(SceSize args, void *argp) {
@@ -517,6 +578,13 @@ static int game_thread(SceSize args, void *argp) {
                                            0x10000100, 16 * 1024, 0, 0, NULL);
     int monitor_status = monitor < 0 ? monitor : sceKernelStartThread(monitor, 0, NULL);
     hlog("[host] Display monitor: %d\n", monitor_status);
+    { SceIoStat st; // a scenario file turns this run into a recorded, scripted session
+      if (sceIoGetstat(PROFILE_DIR "/scenario.txt", &st) >= 0) {
+          sceIoRemove(PROFILE_DIR "/done.txt");
+          int r = ngu_autoplay_load(PROFILE_DIR "/scenario.txt");
+          hlog("[host] Scenario: %d\n", r);
+          if (r == 0) trace_start();
+      } }
 #endif
 
     uint64_t prev = sceKernelGetProcessTimeWide();
@@ -542,6 +610,12 @@ static int game_thread(SceSize args, void *argp) {
         uint64_t now = sceKernelGetProcessTimeWide();
         float dt = (now - prev) / 1000000.0f;
         prev = now;
+#ifdef NGU_VITA_BENCHMARK
+        uint64_t s_in = g_t_input, s_lg = g_t_logic, s_ly = g_t_layout, s_em = g_t_emit, s_dr = g_t_draw, s_sw = g_t_swap, s_up = g_t_upload;
+        static uint64_t trace_t0;
+        static unsigned trace_frame, last_repeats;
+        if (!trace_t0) trace_t0 = now;
+#endif
         PERF(uint64_t tl = now_us());
         SceCtrlData sample;
         if (sceCtrlPeekBufferPositive(0, &sample, 1) > 0) pad = sample;
@@ -563,6 +637,27 @@ static int game_thread(SceSize args, void *argp) {
         }
 #ifdef NGU_VITA_BENCHMARK
         uint64_t end = now_us();
+        if (g_trace_on) {
+            TraceRec r;
+            uint32_t info[7] = {0};
+            ngu_frame_info(info);
+            unsigned rep = atomic_load_explicit(&g_scanout_repeats, memory_order_relaxed);
+            uint32_t up = (uint32_t)(g_t_upload - s_up);
+            r.f[0] = trace_frame++;
+            r.f[1] = (uint32_t)(now - trace_t0);
+            r.f[2] = (uint32_t)(end - now - (g_t_swap - s_sw));
+            r.f[3] = (uint32_t)(g_t_logic - s_lg + g_t_input - s_in);
+            r.f[4] = (uint32_t)(g_t_layout - s_ly);
+            r.f[5] = (uint32_t)(g_t_emit - s_em - (g_t_layout - s_ly));
+            r.f[6] = (uint32_t)(g_t_draw - s_dr);
+            r.f[7] = (uint32_t)(g_t_swap - s_sw);
+            r.f[8] = up;
+            memcpy(&r.f[9], info, sizeof info);
+            r.f[15] = (info[6] ? 4u : 0u) | (up ? 2u : 0u) | (rep != last_repeats ? 1u : 0u);
+            last_repeats = rep;
+            trace_push(&r);
+            if (info[6]) trace_finish();
+        }
         unsigned ms = (unsigned)((end - last_present + 999) / 1000);
         last_present = end;
         g_frame_ms[ms > 250 ? 250 : ms]++;
