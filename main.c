@@ -34,6 +34,8 @@ void ngu_frame(float dt, float x, float y, int down);
 int ngu_pad(uint32_t action);
 void ngu_scroll(float dx, float dy);
 int ngu_emit(void);
+uint32_t ngu_emit_seq(void);
+void ngu_tex_release(uint32_t id);
 uint32_t ngu_layout_us(void);
 const NguBatch *ngu_batches(void);
 const NguVertex *ngu_vertices(void);
@@ -45,14 +47,48 @@ uint64_t ngu_clock_us(uint64_t *debt_us);
 int ngu_autoplay_load(const char *path);
 void ngu_frame_info(uint32_t *out);
 
-static void hlog(const char *fmt, ...) {
+// Log lines: written at once during start-up, then handed to a worker thread so neither the logic nor the render thread waits on storage
+// (a synchronous append took ~80 ms and showed up as a missed-frame run every 5 s).
+#define LOGQ 16
+static char g_logq[LOGQ][1536];
+static unsigned g_log_w, g_log_r;
+static atomic_flag g_log_lock = ATOMIC_FLAG_INIT;
+static SceUID g_log_sema = -1;
+static volatile int g_log_async;
+
+static void hlog_sync(const char *text) {
     FILE *f = fopen(LOG_FILE, "a");
     if (!f) return;
+    fputs(text, f);
+    fclose(f);
+}
+
+static int log_thread(SceSize args, void *argp) {
+    (void)args; (void)argp;
+    for (;;) {
+        sceKernelWaitSema(g_log_sema, 1, NULL);
+        while (g_log_r != g_log_w) {
+            hlog_sync(g_logq[g_log_r % LOGQ]);
+            g_log_r++;
+        }
+    }
+    return 0;
+}
+
+static void hlog(const char *fmt, ...) {
+    char buf[1536];
     va_list ap;
     va_start(ap, fmt);
-    vfprintf(f, fmt, ap);
+    vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
-    fclose(f);
+    if (!g_log_async) { hlog_sync(buf); return; }
+    while (atomic_flag_test_and_set_explicit(&g_log_lock, memory_order_acquire)) {}
+    if (g_log_w - g_log_r < LOGQ) {
+        memcpy(g_logq[g_log_w % LOGQ], buf, sizeof buf);
+        g_log_w++;
+        sceKernelSignalSema(g_log_sema, 1);
+    }
+    atomic_flag_clear_explicit(&g_log_lock, memory_order_release);
 }
 
 #define MAX_TEX 8192
@@ -72,29 +108,84 @@ static void bind_texture(GLuint texture) {
     }
 }
 
-static void upload_atlas(void) {
+static uint64_t now_us(void);
+
+// Two threads (docs/VITA-60.md): L, the big-stack "ngu" thread, runs input, simulation, layout and the draw list;
+// R (render_thread) owns the GL context, uploads textures and presents the newest finished list at the display rate.
+// Finished lists travel through a lock-free triple buffer; textures and the glyph atlas are copied by L and uploaded by R.
+typedef struct { NguVertex *v; size_t vcap; NguBatch *b; size_t bcap; int nb; } Slot;
+static Slot g_slot[3];
+static atomic_int g_mid = 2;   // middle slot; | 4 while R has not taken it yet
+static int g_back = 1;         // owned by L
+static int g_front = 0;        // owned by R
+
+typedef struct { uint8_t *px; uint32_t id, w, h, row; } TexUp;
+static TexUp *g_upq; static int g_upq_n, g_upq_cap;   // copies made by L, waiting for R
+static TexUp *g_rq; static int g_rq_n, g_rq_cap, g_rq_head; // R's own list
+static atomic_flag g_upq_lock = ATOMIC_FLAG_INIT;
+static atomic_uchar g_tex_state[MAX_TEX];            // 0 absent, 1 queued, 2 resident on the GPU
+
+static void upq_lock(void) { while (atomic_flag_test_and_set_explicit(&g_upq_lock, memory_order_acquire)) {} }
+static void upq_unlock(void) { atomic_flag_clear_explicit(&g_upq_lock, memory_order_release); }
+
+#define ATLAS_MAX 1024
+static uint8_t g_atlas_stage[ATLAS_MAX * ATLAS_MAX * 4];
+static atomic_int g_atl;   // 0 idle, 1 L writing, 2 ready for R, 3 R uploading
+static int g_atl_first = 1;
+static uint32_t g_atl_size;
+
+// L: copy the glyph atlas into the staging buffer when it changed (and R is not reading it)
+static void stage_atlas(void) {
+    int prev = 0;
+    if (!atomic_compare_exchange_strong(&g_atl, &prev, 1)) {
+        prev = 2;
+        if (!atomic_compare_exchange_strong(&g_atl, &prev, 1)) return;
+    }
     int dirty = 0;
     uint32_t size = 0;
     const uint8_t *px = ngu_atlas(&dirty, &size);
-    if (!px || (g_atlas_size && !dirty)) return;
-    bind_texture(g_atlas);
-    if (!g_atlas_size) {
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
-        g_atlas_size = size;
-    } else if (dirty) {
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, size, size, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    if (px && size <= ATLAS_MAX && (dirty || g_atl_first)) {
+        memcpy(g_atlas_stage, px, (size_t)size * size * 4);
+        g_atl_size = size;
+        g_atl_first = 0;
+        atomic_store(&g_atl, 2);
+    } else {
+        atomic_store(&g_atl, prev);
     }
 }
 
-void ngu_tex_release(uint32_t id);
+// R: send the staged atlas to the GPU. glTexSubImage2D on the texture in use costs ~65 ms per call whatever its size
+// (measured), so each update goes into a fresh texture object that replaces the old one.
+static unsigned g_tex_us_max, g_atl_us_max, g_tex_bytes;
+static GLuint g_atlas_spare;
+static void upload_atlas(uint64_t budget_us) {
+    (void)budget_us;
+    int expected = 2;
+    if (!atomic_compare_exchange_strong(&g_atl, &expected, 3)) return;
+    uint64_t t = now_us();
+    GLuint fresh = g_atlas_spare;
+    if (!fresh) glGenTextures(1, &fresh);
+    bind_texture(fresh);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, g_atl_size, g_atl_size, 0, GL_RGBA, GL_UNSIGNED_BYTE, g_atlas_stage);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    g_atlas_spare = g_atlas; // the previous one may still be read by the frame in flight: reuse it only for the next update
+    g_atlas = fresh;
+    g_atlas_size = g_atl_size;
+    g_filter[1] = 0;
+    atomic_store(&g_atl, 0);
+    unsigned us = (unsigned)(now_us() - t);
+    if (us > g_atl_us_max) g_atl_us_max = us;
+}
+
 #define TEX_BUDGET (70u << 20)
 static uint32_t g_tex_size[MAX_TEX];
 static uint64_t g_tex_use[MAX_TEX];
-static uint64_t g_frame_no;
+static volatile uint64_t g_frame_no;
 static uint32_t g_tex_total;
 static int g_tex_count;
 
-// frees the least recently used textures until the budget is met
+// R: frees the least recently used textures until the budget is met
 static void evict_for(uint32_t need) {
     while (g_tex_total + need > TEX_BUDGET) {
         int best = -1;
@@ -107,32 +198,117 @@ static void evict_for(uint32_t need) {
         glDeleteTextures(1, &g_tex[best]);
         g_tex[best] = 0;
         g_filter[best] = 0;
+        atomic_store(&g_tex_state[best], 0);
         g_tex_total -= g_tex_size[best];
         g_tex_count--;
     }
 }
 
+// L: copy a texture the GPU does not have yet and hand it to R (the engine keeps no RAM copy afterwards)
+static void queue_tex(uint32_t id) {
+    uint32_t w = 0, h = 0;
+    const uint8_t *px = ngu_tex(id, &w, &h);
+    if (!px || !w || !h) return;
+    uint8_t *copy = malloc((size_t)w * h * 4);
+    if (!copy) return;
+    memcpy(copy, px, (size_t)w * h * 4);
+    ngu_tex_release(id);
+    upq_lock();
+    if (g_upq_n == g_upq_cap) {
+        int cap = g_upq_cap ? g_upq_cap * 2 : 64;
+        TexUp *grown = realloc(g_upq, cap * sizeof *grown);
+        if (!grown) { upq_unlock(); free(copy); return; }
+        g_upq = grown; g_upq_cap = cap;
+    }
+    g_upq[g_upq_n++] = (TexUp){copy, id, w, h, 0};
+    upq_unlock();
+    atomic_store(&g_tex_state[id], 1);
+}
+
+// R: send one queued texture to the GPU
+static int upload_tex(TexUp *u, uint64_t t0, uint64_t budget_us) {
+    (void)t0; (void)budget_us;
+    uint32_t id = u->id;
+    uint64_t t = now_us();
+    evict_for(u->w * u->h * 4);
+    glGenTextures(1, &g_tex[id]);
+    bind_texture(g_tex[id]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, u->w, u->h, 0, GL_RGBA, GL_UNSIGNED_BYTE, u->px);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    g_tex_size[id] = u->w * u->h * 4;
+    g_tex_total += g_tex_size[id];
+    g_tex_count++;
+    g_tex_use[id] = g_frame_no;
+    free(u->px);
+    atomic_store(&g_tex_state[id], 2);
+    unsigned us = (unsigned)(now_us() - t);
+    if (us > g_tex_us_max) { g_tex_us_max = us; g_tex_bytes = u->w * u->h * 4; }
+    return 1;
+}
+
+// R: upload what L queued, at most `budget_us` of work per frame (the rest waits for the next frame; sprites that are not on the GPU yet are skipped)
+static uint64_t run_uploads(uint64_t budget_us) {
+    upq_lock();
+    if (g_upq_n) {
+        if (g_rq_n + g_upq_n > g_rq_cap) {
+            int cap = g_rq_n + g_upq_n + 64;
+            TexUp *grown = realloc(g_rq, cap * sizeof *grown);
+            if (grown) { g_rq = grown; g_rq_cap = cap; }
+        }
+        if (g_rq_n + g_upq_n <= g_rq_cap) {
+            memcpy(g_rq + g_rq_n, g_upq, g_upq_n * sizeof *g_upq);
+            g_rq_n += g_upq_n;
+            g_upq_n = 0;
+        }
+    }
+    upq_unlock();
+    uint64_t t0 = now_us();
+    while (g_rq_head < g_rq_n) {
+        if (!upload_tex(&g_rq[g_rq_head], t0, budget_us)) break;
+        g_rq_head++;
+        if (now_us() - t0 > budget_us) break;
+    }
+    if (g_rq_head == g_rq_n) g_rq_n = g_rq_head = 0;
+    return now_us() - t0;
+}
+
 static GLuint get_tex(uint32_t id) {
     if (id == 0) return g_white;
     if (id == 1) return g_atlas;
-    if (id >= MAX_TEX) return g_white;
-    if (!g_tex[id]) {
-        uint32_t w = 0, h = 0;
-        const uint8_t *px = ngu_tex(id, &w, &h);
-        if (!px) return g_white;
-        evict_for(w * h * 4);
-        glGenTextures(1, &g_tex[id]);
-        bind_texture(g_tex[id]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        g_tex_size[id] = w * h * 4;
-        g_tex_total += g_tex_size[id];
-        g_tex_count++;
-        ngu_tex_release(id); // the RAM copy is no longer needed
-    }
+    if (id >= MAX_TEX || !g_tex[id]) return g_white;
     g_tex_use[id] = g_frame_no;
     return g_tex[id];
+}
+
+// L: hand the finished list to R (copies it, so the engine can build the next one at once)
+static void publish(int nb) {
+    Slot *s = &g_slot[g_back];
+    const NguBatch *b = ngu_batches();
+    const NguVertex *v = ngu_vertices();
+    size_t vn = nb > 0 ? (size_t)b[nb - 1].first + b[nb - 1].count : 0;
+    if (vn > s->vcap) {
+        size_t cap = vn + vn / 4 + 1024;
+        NguVertex *grown = realloc(s->v, cap * sizeof *grown);
+        if (!grown) return;
+        s->v = grown; s->vcap = cap;
+    }
+    if ((size_t)nb > s->bcap) {
+        size_t cap = (size_t)nb + nb / 4 + 64;
+        NguBatch *grown = realloc(s->b, cap * sizeof *grown);
+        if (!grown) return;
+        s->b = grown; s->bcap = cap;
+    }
+    if (vn) memcpy(s->v, v, vn * sizeof *v);
+    if (nb > 0) memcpy(s->b, b, (size_t)nb * sizeof *b);
+    s->nb = nb;
+    for (int i = 0; i < nb; i++) {
+        uint32_t id = b[i].tex;
+        if (id >= 2 && id < MAX_TEX && atomic_load(&g_tex_state[id]) == 0) queue_tex(id);
+    }
+    stage_atlas();
+    int old = atomic_exchange(&g_mid, g_back | 4);
+    g_back = old & 3;
 }
 
 static uint64_t now_us(void) { return sceKernelGetProcessTimeWide(); }
@@ -298,11 +474,15 @@ static void save_shot(const char *path) {
     hlog("[host] capture %s\n", path);
 }
 
-static int g_want_shot;
+static volatile int g_want_shot;
+static volatile uint32_t g_shot_no;
 
 
 // ---------------------------------------------------------------- system keyboard (IME)
-static int g_ime_active;
+static atomic_int g_ime_active, g_ime_req, g_ime_res; // active: set by L when it posts a request, cleared by L once it has the result
+static int g_ime_dialog;                              // R only
+static char g_ime_tb[300], g_ime_out[600];
+static int g_ime_tmax, g_ime_tnum;
 static uint16_t g_ime_title[32], g_ime_init[130], g_ime_buf[130];
 
 static void utf8_to_utf16(const char *s, uint16_t *d, int cap) {
@@ -347,25 +527,25 @@ static void ime_start(const char *init, int max, int numeric) {
     p.maxTextLength = (max > 0 && max <= 128) ? max : 128;
     p.initialText = g_ime_init;
     p.inputTextBuffer = g_ime_buf;
-    if (sceImeDialogInit(&p) >= 0) g_ime_active = 1;
-    else ngu_text_submit("", 0);
+    if (sceImeDialogInit(&p) >= 0) g_ime_dialog = 1;
+    else { g_ime_out[0] = 0; atomic_store(&g_ime_res, 2); }
 }
 
 static void ime_poll(void) {
-    if (!g_ime_active) return;
+    if (!g_ime_dialog) return;
     if (sceImeDialogGetStatus() == SCE_COMMON_DIALOG_STATUS_FINISHED) {
         SceImeDialogResult r;
         memset(&r, 0, sizeof r);
         sceImeDialogGetResult(&r);
         if (r.button == SCE_IME_DIALOG_BUTTON_ENTER) {
-            char out[600];
-            utf16_to_utf8(g_ime_buf, out, sizeof out);
-            ngu_text_submit(out, 1);
+            utf16_to_utf8(g_ime_buf, g_ime_out, sizeof g_ime_out);
+            atomic_store(&g_ime_res, 1);
         } else {
-            ngu_text_submit("", 0);
+            g_ime_out[0] = 0;
+            atomic_store(&g_ime_res, 2);
         }
         sceImeDialogTerm();
-        g_ime_active = 0;
+        g_ime_dialog = 0;
     }
 }
 
@@ -387,16 +567,13 @@ static void setup_draw_state(void) {
     glEnableClientState(GL_COLOR_ARRAY);
 }
 
-static void draw_frame(void) {
+// R: draw one published list and present it
+static void draw_slot(const Slot *s, uint64_t *upload_us) {
     g_frame_no++;
-    PERF(uint64_t t0 = now_us());
-    int nb = ngu_emit();
     PERF(uint64_t t1 = now_us());
-    PERF(g_t_emit += t1 - t0);
-    PERF(g_t_layout += ngu_layout_us());
-    PERF(g_draws += nb);
-    const NguBatch *b = ngu_batches();
-    const NguVertex *v = ngu_vertices();
+    int nb = s->nb;
+    const NguBatch *b = s->b;
+    const NguVertex *v = s->v;
     glDisable(GL_SCISSOR_TEST);
     glClear(GL_COLOR_BUFFER_BIT);
     glEnable(GL_SCISSOR_TEST);
@@ -415,8 +592,9 @@ static void draw_frame(void) {
 #endif
     }
     PERF(uint64_t before_atlas = now_us());
-    upload_atlas();
-    PERF(uint64_t upload_time = now_us() - before_atlas);
+    upload_atlas(3000);
+    PERF(uint64_t atlas_us = now_us() - before_atlas);
+    PERF(*upload_us += atlas_us);
     int32_t last_clip[4] = {-1, -1, -1, -1};
     for (int i = 0; i < nb; i++) {
         int x0 = b[i].clip[0] < 0 ? 0 : b[i].clip[0];
@@ -425,12 +603,9 @@ static void draw_frame(void) {
         int y1 = b[i].clip[3] > 544 ? 544 : b[i].clip[3];
         if (x1 <= x0 || y1 <= y0) continue;
         uint32_t id = b[i].tex;
-#ifdef NGU_VITA_BENCHMARK
-        int missing = id > 1 && id < MAX_TEX && !g_tex[id];
-        uint64_t texture_start = missing ? now_us() : 0;
-#endif
+        // not on the GPU yet (still queued): skip the sprite for a frame or two rather than stall the presentation
+        if (id >= 2 && id < MAX_TEX && atomic_load(&g_tex_state[id]) == 1) continue;
         GLuint texture = get_tex(id);
-        PERF(if (missing) upload_time += now_us() - texture_start);
         bind_texture(texture);
         if (texture == g_white) id = 0;
         uint8_t filter = b[i].nearest ? 2 : 1;
@@ -446,15 +621,15 @@ static void draw_frame(void) {
         }
         glDrawArrays(GL_TRIANGLES, b[i].first, b[i].count);
     }
-    PERF(g_t_upload += upload_time);
-    PERF(g_t_draw += now_us() - t1 - upload_time);
+    PERF(g_t_draw += now_us() - t1 - atlas_us);
     if (g_want_shot) {
-        save_shot(PROFILE_DIR "/shot.tga");
+        if (g_shot_no) { char name[96]; snprintf(name, sizeof name, PROFILE_DIR "/shot%u.tga", (unsigned)g_shot_no); save_shot(name); }
+        else save_shot(PROFILE_DIR "/shot.tga");
         g_want_shot = 0;
         PERF(g_shots++);
     }
     PERF(uint64_t before_swap = now_us());
-    vglSwapBuffers(g_ime_active ? GL_TRUE : GL_FALSE);
+    vglSwapBuffers(g_ime_dialog ? GL_TRUE : GL_FALSE);
     PERF(g_t_swap += now_us() - before_swap);
 }
 
@@ -508,9 +683,131 @@ static void pad_update(const SceCtrlData *pad, uint64_t now, float dt, int enabl
     if (dx || dy) ngu_scroll(dx * distance, dy * distance);
 }
 
+// What L reports to R (trace and statistics only)
+static volatile uint32_t g_info[8];
+static volatile uint64_t g_game_us, g_debt_us;
+static atomic_uint g_l_logic_us, g_l_layout_us, g_l_emit_us, g_l_iter_max_us;
+static uint64_t g_load_start;
+
+// R: owns the GL context from here on. Takes the newest finished list, uploads queued textures, draws, presents (vsync).
+static int render_thread(SceSize args, void *argp) {
+    (void)args; (void)argp;
+    uint64_t prev = now_us();
+    PERF(uint64_t fps_t = prev);
+    PERF(uint64_t last_present = prev);
+    PERF(int fps_n = 0);
+    SceKernelFreeMemorySizeInfo info = {.size = sizeof info};
+    uint64_t load_start = g_load_start;
+    (void)load_start; (void)prev;
+#ifdef NGU_VITA_BENCHMARK
+    uint64_t previous_run_clocks = 0;
+#endif
+    for (;;) {
+        uint64_t now = now_us();
+#ifdef NGU_VITA_BENCHMARK
+        uint64_t s_in = g_t_input, s_lg = g_t_logic, s_ly = g_t_layout, s_em = g_t_emit, s_dr = g_t_draw, s_sw = g_t_swap, s_up = g_t_upload;
+        static uint64_t trace_t0;
+        static unsigned trace_frame, last_repeats;
+        if (!trace_t0) trace_t0 = now;
+        (void)s_in; (void)s_lg; (void)s_ly; (void)s_em;
+#endif
+        if (atomic_load(&g_mid) & 4) {
+            int old = atomic_exchange(&g_mid, g_front);
+            g_front = old & 3;
+        }
+        if (atomic_exchange(&g_ime_req, 0)) ime_start(g_ime_tb, g_ime_tmax, g_ime_tnum);
+        uint64_t upload_us = run_uploads(5000);
+        draw_slot(&g_slot[g_front], &upload_us);
+        PERF(g_t_upload += upload_us);
+        ime_poll();
+#ifdef NGU_VITA_BENCHMARK
+        uint64_t end = now_us();
+        if (g_trace_on) {
+            TraceRec r;
+            uint32_t info[7] = {0};
+            for (int k = 0; k < 7; k++) info[k] = g_info[k];
+            unsigned rep = atomic_load_explicit(&g_scanout_repeats, memory_order_relaxed);
+            uint32_t up = (uint32_t)(g_t_upload - s_up);
+            r.f[0] = trace_frame++;
+            r.f[1] = (uint32_t)(now - trace_t0);
+            uint32_t l_logic = atomic_exchange(&g_l_logic_us, 0), l_layout = atomic_exchange(&g_l_layout_us, 0);
+            uint32_t l_emit = atomic_exchange(&g_l_emit_us, 0), l_iter = atomic_exchange(&g_l_iter_max_us, 0);
+            uint32_t r_work = (uint32_t)(end - now - (g_t_swap - s_sw));
+            r.f[2] = r_work > l_iter ? r_work : l_iter; // the slowest stage of this frame
+            r.f[3] = l_logic;
+            r.f[4] = l_layout;
+            r.f[5] = l_emit;
+            r.f[6] = (uint32_t)(g_t_draw - s_dr);
+            r.f[7] = (uint32_t)(g_t_swap - s_sw);
+            r.f[8] = up;
+            memcpy(&r.f[9], info, sizeof info);
+            r.f[15] = (info[6] ? 4u : 0u) | (up ? 2u : 0u) | (rep != last_repeats ? 1u : 0u);
+            last_repeats = rep;
+            trace_push(&r);
+            if (info[6]) trace_finish();
+        }
+        unsigned ms = (unsigned)((end - last_present + 999) / 1000);
+        last_present = end;
+        g_frame_ms[ms > 250 ? 250 : ms]++;
+        if (ms > g_frame_max) g_frame_max = ms;
+        fps_n++;
+        if (end - fps_t >= 5000000) {
+            float to_ms = 0.001f / fps_n;
+            uint64_t b0 = now_us();
+            sceKernelGetFreeMemorySize(&info);
+            SceKernelThreadInfo thread = {.size = sizeof thread};
+            int thread_status = sceKernelGetThreadInfo(sceKernelGetThreadId(), &thread);
+            uint64_t b2 = now_us();
+            struct mallinfo heap = mallinfo();
+            uint64_t b3 = now_us();
+            uint64_t run_clocks = thread.runClocks - previous_run_clocks;
+            previous_run_clocks = thread.runClocks;
+            uint64_t debt_us = 0;
+            uint64_t game_us = g_game_us; debt_us = g_debt_us;
+            unsigned focus_samples = atomic_exchange(&g_focus_samples, 0);
+            unsigned focus_missed = atomic_exchange(&g_focus_missed, 0);
+            unsigned focus_slow = atomic_exchange(&g_focus_slow, 0);
+            unsigned focus_max = atomic_exchange(&g_focus_max_us, 0);
+            if (focus_samples || focus_missed) {
+                hlog("[focus] presented=%u over_two_refreshes=%u missed_samples=%u max_us=%u\n",
+                     focus_samples, focus_slow, focus_missed, focus_max);
+            }
+            hlog("[perf] t=%.1fs fps=%.2f p50=%u p95=%u p99=%u max=%u input=%.2f input_max=%u pads=%u logic=%.2f layout=%.2f emit=%.2f draw=%.2f upload=%.2f swap=%.2f batches=%u textures=%d gpu_mb=%u shots=%u scanout=%u repeat=%u sample_errors=%u sample_gaps=%u gpu_submits=%u free_kib=%d/%d/%d heap_kib=%u/%u vgl_free_kib=%u/%u/%u thread=%d run_clocks=%llu core=%d affinity=%x game_us=%llu debt_us=%llu\n",
+                (end - load_start) / 1000000.0, fps_n * 1000000.0 / (end - fps_t),
+                percentile(fps_n, 50), percentile(fps_n, 95), percentile(fps_n, 99), g_frame_max,
+                g_t_input * to_ms, g_input_max, g_pad_edges, g_t_logic * to_ms, g_t_layout * to_ms, (g_t_emit - g_t_layout) * to_ms,
+                g_t_draw * to_ms, g_t_upload * to_ms, g_t_swap * to_ms,
+                g_draws / fps_n, g_tex_count, g_tex_total >> 20, g_shots,
+                atomic_exchange(&g_scanout_frames, 0), atomic_exchange(&g_scanout_repeats, 0),
+                atomic_exchange(&g_scanout_errors, 0), atomic_exchange(&g_scanout_gaps, 0),
+                atomic_exchange(&g_display_callbacks, 0),
+                info.size_user >> 10, info.size_cdram >> 10, info.size_phycont >> 10,
+                (unsigned)(heap.uordblks >> 10), (unsigned)(heap.fordblks >> 10),
+                (unsigned)(vglMemFree(VGL_MEM_RAM) >> 10), (unsigned)(vglMemFree(VGL_MEM_VRAM) >> 10),
+                (unsigned)(vglMemFree(VGL_MEM_PHYCONT) >> 10), thread_status, (unsigned long long)run_clocks,
+                thread.lastExecutedCpuId, thread.currentCpuAffinityMask,
+                (unsigned long long)game_us, (unsigned long long)debt_us);
+            uint64_t b4 = now_us();
+            sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
+            sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_OLED_DIMMING);
+            hlog("[perf-cost] mallinfo=%u log=%u atlas_max=%u tex_max=%u tex_bytes=%u us\n", (unsigned)(b3 - b2), (unsigned)(b4 - b3), g_atl_us_max, g_tex_us_max, g_tex_bytes); g_atl_us_max = g_tex_us_max = 0;
+            g_t_input = g_t_logic = g_t_layout = g_t_emit = g_t_draw = g_t_upload = g_t_swap = 0;
+            g_input_max = g_pad_edges = 0;
+            memset(g_frame_ms, 0, sizeof g_frame_ms);
+            g_frame_max = g_draws = g_shots = 0;
+            fps_t = end;
+            fps_n = 0;
+        }
+#endif
+
+    }
+    return 0;
+}
+
 static int game_thread(SceSize args, void *argp) {
     (void)args; (void)argp;
     sceIoMkdir(DATA_DIR, 0777);
+    setenv("NGU_SLICE_MS", "0", 0); // the simulation has a core of its own: no time slicing (a variable set by hand still wins)
 #ifdef NGU_VITA_BENCHMARK
     sceIoMkdir(PROFILE_DIR, 0777);
     if (setenv("NGU_VITA_SAVE_DIR", PROFILE_DIR "/save", 1) != 0) return 1;
@@ -587,13 +884,21 @@ static int game_thread(SceSize args, void *argp) {
       } }
 #endif
 
-    uint64_t prev = sceKernelGetProcessTimeWide();
-    PERF(uint64_t fps_t = prev);
-    PERF(uint64_t last_present = prev);
-    PERF(int fps_n = 0);
-#ifdef NGU_VITA_BENCHMARK
-    uint64_t previous_run_clocks = 0;
-#endif
+    // From here on two threads: this one (L) runs input, simulation, layout and the draw list at ~60 Hz;
+    // R (render_thread) presents the newest finished list at the display rate, whatever L is doing.
+    g_load_start = load_start;
+    g_log_sema = sceKernelCreateSema("ngu-log", 0, 0, 1000, NULL);
+    SceUID lt = g_log_sema < 0 ? g_log_sema : sceKernelCreateThread("ngu-log", log_thread, 0x10000100, 64 * 1024, 0, 0, NULL);
+    if (lt >= 0 && sceKernelStartThread(lt, 0, NULL) >= 0) g_log_async = 1;
+    // the render thread gets its own core (user core 0); if the system refuses the mask, any core
+    SceUID rt = sceKernelCreateThread("ngu-render", render_thread, 0x10000100, 512 * 1024, 0, SCE_KERNEL_CPU_MASK_USER_0, NULL);
+    if (rt < 0) rt = sceKernelCreateThread("ngu-render", render_thread, 0x10000100, 512 * 1024, 0, 0, NULL);
+    int rstatus = rt < 0 ? rt : sceKernelStartThread(rt, 0, NULL);
+    hlog("[host] Render thread: %d\n", rstatus);
+
+    uint64_t prev = now_us();
+    uint64_t next = prev;
+    uint32_t last_seq = 0;
     float tx = 0, ty = 0;
     int down = 0;
     SceCtrlData pad = {.lx = 128, .ly = 128, .rx = 128, .ry = 128};
@@ -607,114 +912,79 @@ static int game_thread(SceSize args, void *argp) {
         } else {
             down = 0;
         }
-        uint64_t now = sceKernelGetProcessTimeWide();
+        uint64_t now = now_us();
         float dt = (now - prev) / 1000000.0f;
         prev = now;
-#ifdef NGU_VITA_BENCHMARK
-        uint64_t s_in = g_t_input, s_lg = g_t_logic, s_ly = g_t_layout, s_em = g_t_emit, s_dr = g_t_draw, s_sw = g_t_swap, s_up = g_t_upload;
-        static uint64_t trace_t0;
-        static unsigned trace_frame, last_repeats;
-        if (!trace_t0) trace_t0 = now;
-#endif
+        int res = atomic_exchange(&g_ime_res, 0);
+        if (res) {
+            ngu_text_submit(g_ime_out, res == 1);
+            atomic_store(&g_ime_active, 0);
+        }
         PERF(uint64_t tl = now_us());
         SceCtrlData sample;
         if (sceCtrlPeekBufferPositive(0, &sample, 1) > 0) pad = sample;
-        pad_update(&pad, now, dt, !g_ime_active && !down);
+        int ime = atomic_load(&g_ime_active);
+        pad_update(&pad, now, dt, !ime && !down);
         PERF(uint64_t input_us = now_us() - tl);
         PERF(g_t_input += input_us);
         PERF(if (input_us > g_input_max) g_input_max = (unsigned)input_us);
-        if (!g_ime_active) ngu_frame(dt, tx, ty, down);
-        PERF(g_t_logic += now_us() - tl - input_us);
+        if (!ime) ngu_frame(dt, tx, ty, down);
+        uint64_t t_frame = now_us();
         { static int sel_prev; int sel = (pad.buttons & SCE_CTRL_SELECT) != 0;
           if (sel && !sel_prev) g_want_shot = 1;
           sel_prev = sel; }
-        draw_frame();
-        if (!g_ime_active) {
-            char tb[300]; int tmax = 0, tnum = 0;
-            if (ngu_text_request(tb, sizeof tb, &tmax, &tnum)) ime_start(tb, tmax, tnum);
-        } else {
-            ime_poll();
+        int nb = ngu_emit();
+        uint64_t t_emit = now_us();
+        uint32_t seq = ngu_emit_seq();
+        if (seq != last_seq) {
+            last_seq = seq;
+            publish(nb);
         }
+        PERF(g_t_logic += t_frame - tl - input_us);
+        PERF(g_t_emit += t_emit - t_frame);
+        PERF(g_t_layout += ngu_layout_us());
+        PERF(g_draws += nb);
 #ifdef NGU_VITA_BENCHMARK
-        uint64_t end = now_us();
-        if (g_trace_on) {
-            TraceRec r;
-            uint32_t info[7] = {0};
+        {
+            uint32_t info[8] = {0};
             ngu_frame_info(info);
-            unsigned rep = atomic_load_explicit(&g_scanout_repeats, memory_order_relaxed);
-            uint32_t up = (uint32_t)(g_t_upload - s_up);
-            r.f[0] = trace_frame++;
-            r.f[1] = (uint32_t)(now - trace_t0);
-            r.f[2] = (uint32_t)(end - now - (g_t_swap - s_sw));
-            r.f[3] = (uint32_t)(g_t_logic - s_lg + g_t_input - s_in);
-            // a frame that re-presents the previous list does no layout: ngu_layout_us() still returns the last value
-            uint64_t emit_d = g_t_emit - s_em, layout_d = g_t_layout - s_ly;
-            if (layout_d > emit_d) layout_d = 0;
-            r.f[4] = (uint32_t)layout_d;
-            r.f[5] = (uint32_t)(emit_d - layout_d);
-            r.f[6] = (uint32_t)(g_t_draw - s_dr);
-            r.f[7] = (uint32_t)(g_t_swap - s_sw);
-            r.f[8] = up;
-            memcpy(&r.f[9], info, sizeof info);
-            r.f[15] = (info[6] ? 4u : 0u) | (up ? 2u : 0u) | (rep != last_repeats ? 1u : 0u);
-            last_repeats = rep;
-            trace_push(&r);
-            if (info[6]) trace_finish();
-        }
-        unsigned ms = (unsigned)((end - last_present + 999) / 1000);
-        last_present = end;
-        g_frame_ms[ms > 250 ? 250 : ms]++;
-        if (ms > g_frame_max) g_frame_max = ms;
-        fps_n++;
-        if (end - fps_t >= 5000000) {
-            float to_ms = 0.001f / fps_n;
-            sceKernelGetFreeMemorySize(&info);
-            SceKernelThreadInfo thread = {.size = sizeof thread};
-            int thread_status = sceKernelGetThreadInfo(sceKernelGetThreadId(), &thread);
-            struct mallinfo heap = mallinfo();
-            uint64_t run_clocks = thread.runClocks - previous_run_clocks;
-            previous_run_clocks = thread.runClocks;
-            uint64_t debt_us = 0;
-            uint64_t game_us = ngu_clock_us(&debt_us);
-            unsigned focus_samples = atomic_exchange(&g_focus_samples, 0);
-            unsigned focus_missed = atomic_exchange(&g_focus_missed, 0);
-            unsigned focus_slow = atomic_exchange(&g_focus_slow, 0);
-            unsigned focus_max = atomic_exchange(&g_focus_max_us, 0);
-            if (focus_samples || focus_missed) {
-                hlog("[focus] presented=%u over_two_refreshes=%u missed_samples=%u max_us=%u\n",
-                     focus_samples, focus_slow, focus_missed, focus_max);
-            }
-            hlog("[perf] t=%.1fs fps=%.2f p50=%u p95=%u p99=%u max=%u input=%.2f input_max=%u pads=%u logic=%.2f layout=%.2f emit=%.2f draw=%.2f upload=%.2f swap=%.2f batches=%u textures=%d gpu_mb=%u shots=%u scanout=%u repeat=%u sample_errors=%u sample_gaps=%u gpu_submits=%u free_kib=%d/%d/%d heap_kib=%u/%u vgl_free_kib=%u/%u/%u thread=%d run_clocks=%llu core=%d affinity=%x game_us=%llu debt_us=%llu\n",
-                (end - load_start) / 1000000.0, fps_n * 1000000.0 / (end - fps_t),
-                percentile(fps_n, 50), percentile(fps_n, 95), percentile(fps_n, 99), g_frame_max,
-                g_t_input * to_ms, g_input_max, g_pad_edges, g_t_logic * to_ms, g_t_layout * to_ms, (g_t_emit - g_t_layout) * to_ms,
-                g_t_draw * to_ms, g_t_upload * to_ms, g_t_swap * to_ms,
-                g_draws / fps_n, g_tex_count, g_tex_total >> 20, g_shots,
-                atomic_exchange(&g_scanout_frames, 0), atomic_exchange(&g_scanout_repeats, 0),
-                atomic_exchange(&g_scanout_errors, 0), atomic_exchange(&g_scanout_gaps, 0),
-                atomic_exchange(&g_display_callbacks, 0),
-                info.size_user >> 10, info.size_cdram >> 10, info.size_phycont >> 10,
-                (unsigned)(heap.uordblks >> 10), (unsigned)(heap.fordblks >> 10),
-                (unsigned)(vglMemFree(VGL_MEM_RAM) >> 10), (unsigned)(vglMemFree(VGL_MEM_VRAM) >> 10),
-                (unsigned)(vglMemFree(VGL_MEM_PHYCONT) >> 10), thread_status, (unsigned long long)run_clocks,
-                thread.lastExecutedCpuId, thread.currentCpuAffinityMask,
-                (unsigned long long)game_us, (unsigned long long)debt_us);
-            sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
-            sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_OLED_DIMMING);
-            g_t_input = g_t_logic = g_t_layout = g_t_emit = g_t_draw = g_t_upload = g_t_swap = 0;
-            g_input_max = g_pad_edges = 0;
-            memset(g_frame_ms, 0, sizeof g_frame_ms);
-            g_frame_max = g_draws = g_shots = 0;
-            fps_t = end;
-            fps_n = 0;
+            for (int k = 0; k < 8; k++) g_info[k] = info[k];
+            { static uint32_t shots_seen; if (info[7] != shots_seen) { shots_seen = info[7]; g_shot_no = shots_seen; g_want_shot = 1; } }
+            uint64_t debt = 0;
+            g_game_us = ngu_clock_us(&debt);
+            g_debt_us = debt;
+            uint32_t lay = ngu_layout_us();
+            uint32_t emit_us = (uint32_t)(t_emit - t_frame);
+            if (lay > emit_us) lay = 0; // a frame that re-presented the previous list did no layout
+            uint32_t iter = (uint32_t)(now_us() - tl);
+            atomic_fetch_add(&g_l_logic_us, (uint32_t)(t_frame - tl - input_us) + (uint32_t)input_us);
+            atomic_fetch_add(&g_l_layout_us, lay);
+            atomic_fetch_add(&g_l_emit_us, emit_us - lay);
+            uint32_t peak = atomic_load(&g_l_iter_max_us);
+            while (peak < iter && !atomic_compare_exchange_weak(&g_l_iter_max_us, &peak, iter)) {}
         }
 #endif
+        if (!atomic_load(&g_ime_active)) {
+            char tb[300]; int tmax = 0, tnum = 0;
+            if (ngu_text_request(tb, sizeof tb, &tmax, &tnum)) {
+                memcpy(g_ime_tb, tb, sizeof g_ime_tb);
+                g_ime_tmax = tmax;
+                g_ime_tnum = tnum;
+                atomic_store(&g_ime_active, 1);
+                atomic_store(&g_ime_req, 1);
+            }
+        }
+        // pace: ~60 iterations per second (a long iteration just delays the next ones; R keeps presenting)
+        next += 16667;
+        uint64_t after = now_us();
+        if (after < next) sceKernelDelayThread((SceUInt32)(next - after));
+        else if (after - next > 50000) next = after;
     }
     return 0;
 }
 
 int main(void) {
-    SceUID th = sceKernelCreateThread("ngu", game_thread, 0x10000100, 24 * 1024 * 1024, 0, 0, NULL);
+    SceUID th = sceKernelCreateThread("ngu", game_thread, 0x10000100, 24 * 1024 * 1024, 0, SCE_KERNEL_CPU_MASK_USER_1, NULL);
     sceKernelStartThread(th, 0, NULL);
     sceKernelWaitThreadEnd(th, NULL, NULL);
     return 0;
