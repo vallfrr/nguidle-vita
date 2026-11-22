@@ -10,3 +10,6 @@ int lchown(const char *p, uid_t u, gid_t g) { (void)p; (void)u; (void)g; errno =
 int fchown(int fd, uid_t u, gid_t g) { (void)fd; (void)u; (void)g; errno = ENOSYS; return -1; }
 ssize_t readlink(const char *p, char *b, size_t n) { (void)p; (void)b; (void)n; errno = ENOSYS; return -1; }
 pid_t getppid(void) { return 1; }
+
+// vitaGL's boot splash (its logo during vglInit) is replaced by our own loading screen; linked with --wrap=invoke_splashscreen.
+void __wrap_invoke_splashscreen(void) {}

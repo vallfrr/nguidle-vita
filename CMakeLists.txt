@@ -52,7 +52,7 @@ target_link_libraries(ngu
   SceRtc_stub ScePower_stub SceShaccCg_stub SceIme_stub SceKernelDmacMgr_stub
   pthread stdc++ m z)
 # Leave space for the SCE module metadata appended by vita-elf-create.
-target_link_options(ngu PRIVATE -Wl,--allow-multiple-definition -Wl,--defsym=__sce_headroom=0x4000)
+target_link_options(ngu PRIVATE -Wl,--allow-multiple-definition -Wl,--wrap=invoke_splashscreen -Wl,--defsym=__sce_headroom=0x4000)
 
 vita_create_self(eboot.bin ngu)
 vita_create_vpk(ngu.vpk ${VITA_TITLEID} eboot.bin
