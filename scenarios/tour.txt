@@ -178,4 +178,5 @@
 8950 mark menu57
 8950 menu 57
 8980 pad d
-9100 end
+9100 check tour
+9101 end

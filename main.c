@@ -647,8 +647,11 @@ static int game_thread(SceSize args, void *argp) {
             r.f[1] = (uint32_t)(now - trace_t0);
             r.f[2] = (uint32_t)(end - now - (g_t_swap - s_sw));
             r.f[3] = (uint32_t)(g_t_logic - s_lg + g_t_input - s_in);
-            r.f[4] = (uint32_t)(g_t_layout - s_ly);
-            r.f[5] = (uint32_t)(g_t_emit - s_em - (g_t_layout - s_ly));
+            // a frame that re-presents the previous list does no layout: ngu_layout_us() still returns the last value
+            uint64_t emit_d = g_t_emit - s_em, layout_d = g_t_layout - s_ly;
+            if (layout_d > emit_d) layout_d = 0;
+            r.f[4] = (uint32_t)layout_d;
+            r.f[5] = (uint32_t)(emit_d - layout_d);
             r.f[6] = (uint32_t)(g_t_draw - s_dr);
             r.f[7] = (uint32_t)(g_t_swap - s_sw);
             r.f[8] = up;
