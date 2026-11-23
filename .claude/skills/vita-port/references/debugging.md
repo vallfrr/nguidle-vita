@@ -43,7 +43,7 @@ Start from the symptom table; most Vita problems repeat. Items tagged *(unverifi
 
 | Code | Meaning |
 |---|---|
-| `0x8010113D` | LiveArea PNGs not indexed / wrong format. Run `scripts/check_vpk.py`; fix with pngquant or `make_placeholder_assets.py` |
+| `0x8010113D` | LiveArea PNGs not indexed / wrong format. Run `tools/check_vpk.py`; fix with pngquant or `make_placeholder_assets.py` |
 | `0x8010111C` | `head.bin` missing |
 | `0x80101104` | corrupt app.db entry |
 | `0x80010016` | directory limit reached |

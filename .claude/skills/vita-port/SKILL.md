@@ -183,7 +183,7 @@ data paths (`app0:` is read-only, write to `ux0:data/<name>/`), audio (48 kHz S1
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
-python3 ~/.claude/skills/vita-port/scripts/check_vpk.py build/<name>.vpk
+python3 tools/check_vpk.py build/<name>.vpk
 ```
 
 `check_vpk.py` verifies the title ID (exactly 9 characters), version format, the eboot's SELF
