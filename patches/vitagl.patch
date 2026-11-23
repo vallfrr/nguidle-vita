@@ -1,0 +1,8 @@
+diff --git a/Makefile b/Makefile
+--- a/Makefile
++++ b/Makefile
+@@ -26,3 +26,4 @@
++NO_SPLASHSCREEN ?= 1
+ ifeq ($(NO_SPLASHSCREEN),1)
+ CFLAGS += -DSKIP_SPLASHSCREEN
+ endif

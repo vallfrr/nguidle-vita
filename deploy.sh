@@ -2,8 +2,8 @@
 # Install the project's VPK through an already configured Vita agent bridge.
 set -euo pipefail
 source_dir=$(cd "$(dirname "$0")" && pwd)
-engine=${NGUIDLE_RUST:-$(dirname "$source_dir")}
-build=${NGU_VITA_BUILD_DIR:-"$engine/out/vita"}
+. "$source_dir/tools/environment.sh"
+build=$NGU_VITA_BUILD_DIR
 package="$build/ngu.vpk"
 agent() { bash "${VITA_AGENT:?Set VITA_AGENT to your local Vita agent wrapper}" "$@"; }
 python3 "$source_dir/.claude/skills/vita-port/scripts/check_vpk.py" "$package"

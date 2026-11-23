@@ -3,8 +3,11 @@
 set -euo pipefail
 . "$HOME/.cargo/env"
 source_dir=$(cd "$(dirname "$0")" && pwd)
-engine=${NGUIDLE_RUST:-$(dirname "$source_dir")}
-build=${NGU_VITA_BUILD_DIR:-"$engine/out/vita"}
+. "$source_dir/tools/environment.sh"
+engine=$(bash "$source_dir/tools/engine.sh")
+build=$NGU_VITA_BUILD_DIR
+nightly=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$source_dir/rust-toolchain.toml")
+test -n "$nightly"
 target=armv7-sony-vita-newlibeabihf
 export VITASDK=${VITASDK:-"$HOME/vitasdk"}
 export PATH="$VITASDK/bin:$PATH"
@@ -40,5 +43,10 @@ case ${NGU_VITA_LOGIC:-interpreter} in
         exit 2
         ;;
 esac
-bash tools/capbuild.sh "${NGU_VITA_BUILD_MEMORY_GB:-12}" cargo build "${configuration[@]}" --locked --profile "$profile" \
-    --package "$crate" --lib --target "$target" -Z "build-std=std,$panic_runtime"
+command=(cargo "+$nightly" build "${configuration[@]}" --locked --profile "$profile"
+    --package "$crate" --lib --target "$target" -Z "build-std=std,$panic_runtime")
+if [ "$crate" = ngu-gen ]; then
+    bash tools/capbuild.sh "${NGU_VITA_BUILD_MEMORY_GB:-12}" "${command[@]}"
+else
+    "${command[@]}" --jobs "${NGU_VITA_BUILD_JOBS:-2}"
+fi

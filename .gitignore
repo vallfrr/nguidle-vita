@@ -1,2 +1,8 @@
 # Vita tools cloned by the skills (vita-perf, vita-err...)
 agent/
+build/
+work/
+toolchains/
+vita-agent/
+*.vpk
+__pycache__/
