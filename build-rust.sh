@@ -43,5 +43,10 @@ case ${NGU_VITA_LOGIC:-interpreter} in
         exit 2
         ;;
 esac
-bash tools/capbuild.sh "${NGU_VITA_BUILD_MEMORY_GB:-12}" cargo "+$nightly" build "${configuration[@]}" --locked --profile "$profile" \
-    --package "$crate" --lib --target "$target" -Z "build-std=std,$panic_runtime"
+command=(cargo "+$nightly" build "${configuration[@]}" --locked --profile "$profile"
+    --package "$crate" --lib --target "$target" -Z "build-std=std,$panic_runtime")
+if [ "$crate" = ngu-gen ]; then
+    bash tools/capbuild.sh "${NGU_VITA_BUILD_MEMORY_GB:-12}" "${command[@]}"
+else
+    "${command[@]}" --jobs "${NGU_VITA_BUILD_JOBS:-2}"
+fi

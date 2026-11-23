@@ -7,7 +7,7 @@ build=$NGU_VITA_BUILD_DIR
 export PATH="$VITASDK/bin:$HOME/tools/cmake/bin:$HOME/.local/bin:$PATH"
 vgl=${NGU_VGL_LIB:-"$NGU_BUILD/vita/vitagl/libvitaGL.a"}
 if [ ! -s "$vgl" ]; then
-    echo "Run tools/setup --vita from the engine checkout to build the patched vitaGL." >&2
+    echo "Run bash setup-tools.sh --build-only to build the patched vitaGL." >&2
     exit 1
 fi
 bash "$source_dir/build-rust.sh"

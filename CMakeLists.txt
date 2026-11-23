@@ -27,6 +27,7 @@ endif()
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,-q -O2 -g -std=gnu11")
 add_executable(ngu main.c stubs.c)
+target_compile_options(ngu PRIVATE -Wall -Wextra)
 if(NGU_NATIVE_LOGIC)
   target_compile_definitions(ngu PRIVATE NGU_NATIVE_LOGIC)
 endif()

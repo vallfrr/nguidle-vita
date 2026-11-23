@@ -32,6 +32,12 @@ just doctor
 bash build.sh
 ```
 
+Install Ruff with `python3 -m pip install ruff==0.11.13` in your Python
+environment. `just check` validates the engine pin and builds the
+interpreter package with `-Wall -Wextra` under `build/vita/check`.
+It sets up only the build dependencies. Console pairing, game data and
+the optional native game build have their own workflow.
+
 The default build uses the shared CIL interpreter and writes `build/vita/host/ngu.vpk`
 under the workspace.
 The optional translated-Rust build requires generated source from your own

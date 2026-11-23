@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Add local and GitHub host compilation checks with VitaSDK and C warnings enabled.
+
 ## [0.1.0]
 
 - Pin the static library build to the engine's `v0.1.0` source revision.
