@@ -312,9 +312,10 @@ That is fine, but it means the scheduler decides where the render thread runs, a
 "which core is the GL thread on" when that is the question that matters. A census is the cheap first
 step; `assets/cpu_placement.{hpp,cpp}` in this skill is a drop-in implementation.
 
-**You cannot enumerate threads you did not create.** Checked in VitaSDK 2026.08: `SceKernelThreadInfo`
-is DECLARED in `psp2/kernel/threadmgr/thread.h` (`sceKernelGetThreadInfo` takes a pointer to it) and
-never DEFINED anywhere in the headers, and there is no thread-enumeration function. kubridge does not
+**Querying a known thread ID and discovering all process threads are separate operations.**
+The headers used by this port define `SceKernelThreadInfo` in `psp2common/kernel/threadmgr.h`
+with `runClocks`, `lastExecutedCpuId` and `currentCpuAffinityMask`. Initialize `size` before
+calling `sceKernelGetThreadInfo`. The user-mode headers do not expose a process-thread enumeration function. kubridge does not
 help either -- its exports are `kuKernelAllocMemBlock`, `kuKernelFlushCaches`,
 `kuKernelCpuUnrestrictedMemcpy`, `kuKernelMemProtect`, `MemReserve/Commit/Decommit`, the two exception
 handlers, and `kuPowerGet/SetSysClockFrequency`; there is no affinity or thread-list call. So a census

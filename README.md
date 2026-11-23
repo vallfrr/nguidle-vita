@@ -22,7 +22,7 @@ Vita build onward.
 
 Use WSL or Linux with VitaSDK, CMake, Make, Rustup, Git, Just and Python
 3.11 or later. This checkout fetches the engine through the `engine`
-submodule. Its revision must match engine tag `v0.1.0`. Setup installs
+submodule. Its revision must match engine tag `v0.2.0`. Setup installs
 the pinned Rust nightly, patched vitaGL and standalone Vita client.
 
 ```sh
