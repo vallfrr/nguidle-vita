@@ -20,19 +20,26 @@ Vita build onward.
 
 ## Build
 
-Use WSL or Linux with VitaSDK, vitaGL, Python 3 and a Rust nightly with
-`rust-src`. Clone this repository inside the Rust checkout as `nguidle-vita/`.
+Use WSL or Linux with VitaSDK, CMake, Make and Python 3.11 or later. Keep
+the Rust and Vita checkouts side by side. The engine's setup installs the
+pinned Rust nightly, patched vitaGL library and standalone Vita client.
 
 ```sh
-bash nguidle-vita/build.sh
+cd ../nguidle-rust
+python3 -B tools/setup --vita
+python3 -B tools/doctor --vita
+cd ../nguidle-vita
+bash build.sh
 ```
 
-The default build uses the shared CIL interpreter and writes `out/vita/ngu.vpk`.
+The default build uses the shared CIL interpreter and writes `build/vita/host/ngu.vpk`
+under the workspace.
 The optional translated-Rust build requires generated source from your own
 installation. Generate it using the Rust project's instructions, then run:
 
 ```sh
-NGU_VITA_LOGIC=native NGU_VITA_BUILD_DIR="$PWD/out/vita-native" bash nguidle-vita/build.sh
+source tools/environment.sh
+NGU_VITA_LOGIC=native NGU_VITA_BUILD_DIR="$NGU_BUILD/vita/native" bash build.sh
 ```
 
 `VITASDK` defaults to `$HOME/vitasdk`. Set `NGUIDLE_RUST` if the engine resides
@@ -46,8 +53,8 @@ before launching the benchmark. The standard VPK uses `ux0:data/ngu/save/`.
 Use a separate output directory for the benchmark package.
 
 ```sh
-NGU_VITA_BENCHMARK=ON NGU_VITA_BUILD_DIR="$PWD/out/vita-bench-build" \
-  bash nguidle-vita/build.sh
+source tools/environment.sh
+NGU_VITA_BENCHMARK=ON NGU_VITA_BUILD_DIR="$NGU_BUILD/vita/bench" bash build.sh
 ```
 
 Every five seconds, `ux0:data/ngu/bench/host.txt`
@@ -90,8 +97,9 @@ python3 tools/pack.py out/vita-data "$game_data/Managed/Assembly-CSharp.dll" out
 Install the VPK and copy `ngu.pak` to `ux0:data/ngu/ngu.pak`. Repack the data if
 your archive predates the inclusion of `tags.json`, which places the game menus
 under the resource bar. The VPK contains only the engine and LiveArea assets.
-With a configured Vita agent, set
-`VITA_AGENT` to the local wrapper and use `bash nguidle-vita/deploy.sh`.
+With a paired Vita agent, run `bash deploy.sh` from this checkout. The wrapper
+installed by setup uses its own private client state. Set `VITA_AGENT` to
+choose another wrapper.
 Pass `pak` if you also want to deploy the prepared data.
 The deployment script names each uploaded VPK by its content hash. Old VPKs
 can be removed from `ux0:data/ngu/` after installation to reclaim space.
