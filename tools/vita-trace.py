@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Summarizes a per-frame trace (docs/VITA-60.md) in about 25 lines: where the time goes, which action and menu cause spikes.
    python tools/vita-trace.py <trace.csv|trace.bin> [--scenario FILE] [--log FILE] [--budget MS] [--baseline FILE.json] [--save FILE.json]
-CSV columns (any subset): frame,tick,steps,instr,menu,action,marks,logic_us,emit_us,total_us,layout_us,draw_us,swap_us,upload_us.
+CSV columns include frame,tick,steps,instr,menu,action,marks,logic_us,emit_us,work_us,layout_us,draw_us,swap_us,upload_us.
+Older PC CSV traces use total_us.
 .bin = the Vita host's records: 'NGUT', u32 count, then 16 little-endian u32 per frame:
-frame,t_us,total,logic,layout,emit,draw,swap,upload,tick,steps,instr,menu,action,marks,flags."""
+frame,t_us,work_us,logic,layout,emit,draw,swap,upload,tick,steps,instr,menu,action,marks,flags."""
 import sys, struct, json, argparse, statistics as st
 
 ap = argparse.ArgumentParser()
@@ -11,7 +12,7 @@ ap.add_argument("trace"); ap.add_argument("--scenario"); ap.add_argument("--log"
 ap.add_argument("--budget", type=float, default=16.7); ap.add_argument("--baseline"); ap.add_argument("--save")
 a = ap.parse_args()
 
-COLS = "frame t_us total_us logic_us layout_us emit_us draw_us swap_us upload_us tick steps instr menu action marks flags".split()
+COLS = "frame t_us work_us logic_us layout_us emit_us draw_us swap_us upload_us tick steps instr menu action marks flags".split()
 def load(path):
     if path.endswith(".bin"):
         b = open(path, "rb").read()
@@ -27,8 +28,12 @@ def load(path):
 
 rows = load(a.trace)
 if not rows: sys.exit("empty trace")
-def work(r):  # microseconds of CPU work in the frame
-    return r["total_us"] if r.get("total_us") else r.get("logic_us", 0) + r.get("emit_us", 0) + r.get("draw_us", 0) + r.get("swap_us", 0)
+def work(r):
+    if "work_us" in r:
+        return r["work_us"]
+    if "total_us" in r:
+        return r["total_us"]
+    return sum(r.get(k, 0) for k in ("logic_us", "emit_us", "draw_us"))
 
 # scenario actions in execution order (one per frame, `pad abc` = three) and mark names from the log
 acts = []
@@ -52,7 +57,9 @@ ms = [work(r) / 1000 for r in rows]
 if "t_us" in rows[0] and len(rows) > 10:
     iv = [(b["t_us"] - c["t_us"]) / 1000 for c, b in zip(rows, rows[1:]) if 0 < b["t_us"] - c["t_us"] < 5_000_000]
     drops = sum(1 for x in iv if x > 25.0)  # more than 1.5 refreshes between two frames = a missed vblank
-    print(f"presented at {1000 / (sum(iv) / len(iv)):.1f} fps average; frames later than 25 ms: {drops} ({100 * drops / len(iv):.1f}%), longest gap {max(iv):.0f} ms; flagged scanout repeats {sum(r['flags'] & 1 for r in rows)}")
+    if iv:
+        repeats = sum(r.get("flags", 0) & 1 for r in rows)
+        print(f"render loop {1000 / (sum(iv) / len(iv)):.1f} fps average; intervals over 25 ms: {drops} ({100 * drops / len(iv):.1f}%), longest gap {max(iv):.0f} ms; records flagging scanout repeats {repeats}")
 over = [i for i, m in enumerate(ms) if m > a.budget]
 q = lambda xs, p: sorted(xs)[min(len(xs) - 1, int(len(xs) * p))]
 out = {"frames": len(rows), "p50": q(ms, .5), "p95": q(ms, .95), "p99": q(ms, .99), "max": max(ms), "over": len(over)}

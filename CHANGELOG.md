@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Publish texture queue state before handing uploads to the renderer.
+- Give logic and rendering their own benchmark sample counts and report dropped log lines.
+- Pin the engine to `v0.2.0`.
+
 - Add local and GitHub host compilation checks with VitaSDK and C warnings enabled.
 
 ## [0.1.0]
