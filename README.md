@@ -20,30 +20,32 @@ Vita build onward.
 
 ## Build
 
-Use WSL or Linux with VitaSDK, CMake, Make and Python 3.11 or later. Keep
-the Rust and Vita checkouts side by side. The engine's setup installs the
-pinned Rust nightly, patched vitaGL library and standalone Vita client.
+Use WSL or Linux with VitaSDK, CMake, Make, Rustup, Git, Just and Python
+3.11 or later. This checkout fetches the engine through the `engine`
+submodule. Its revision must match engine tag `v0.1.0`. Setup installs
+the pinned Rust nightly, patched vitaGL and standalone Vita client.
 
 ```sh
-cd ../nguidle-rust
-python3 -B tools/setup --vita
-python3 -B tools/doctor --vita
-cd ../nguidle-vita
+just check
+just setup
+just doctor
 bash build.sh
 ```
 
 The default build uses the shared CIL interpreter and writes `build/vita/host/ngu.vpk`
 under the workspace.
 The optional translated-Rust build requires generated source from your own
-installation. Generate it using the Rust project's instructions, then run:
+installation. Generate it in the `engine` checkout using the engine
+instructions, then run from the Vita repository:
 
 ```sh
 source tools/environment.sh
 NGU_VITA_LOGIC=native NGU_VITA_BUILD_DIR="$NGU_BUILD/vita/native" bash build.sh
 ```
 
-`VITASDK` defaults to `$HOME/vitasdk`. Set `NGUIDLE_RUST` if the engine resides
-elsewhere. Both builds verify the VPK headers and LiveArea PNG format.
+`VITASDK` defaults to the workspace SDK or `$HOME/vitasdk`. Both builds
+verify the VPK headers and LiveArea PNG format. The optional read-only
+console check is `bash tools/doctor.sh --probe-console`.
 
 ## Benchmark on a console
 
@@ -83,15 +85,16 @@ in the full-game build.
 
 ## Prepare and install your data
 
-Use the tools from the Rust checkout. Set `game_data` to the
+Use the tools from the pinned engine. Set `game_data` to the
 `NGUIdle_Data` folder from your Steam Windows 1.260 installation. The
-preparation dependencies are listed in `tools/requirements-prep.txt`.
+preparation dependencies are listed in `engine/tools/requirements-prep.txt`.
 
 ```sh
 game_data=/path/to/NGUIdle_Data
-python3 tools/verify_game_data.py "$game_data"
-python3 tools/nguprep.py --game-data "$game_data" --out out/vita-data
-python3 tools/pack.py out/vita-data "$game_data/Managed/Assembly-CSharp.dll" out/vita/ngu.pak
+source tools/environment.sh
+python3 engine/tools/verify_game_data.py "$game_data"
+python3 engine/tools/nguprep.py --game-data "$game_data" --out "$NGU_WORK/prepared/vita"
+python3 engine/tools/pack.py "$NGU_WORK/prepared/vita" "$game_data/Managed/Assembly-CSharp.dll" "$NGU_VITA_BUILD_DIR/ngu.pak"
 ```
 
 Install the VPK and copy `ngu.pak` to `ux0:data/ngu/ngu.pak`. Repack the data if

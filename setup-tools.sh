@@ -2,10 +2,7 @@
 # Install the pinned vitaGL build and the independent Vita client.
 set -euo pipefail
 source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-default_home=$(dirname -- "$(dirname -- "$source_dir")")
-: "${NGUIDLE_HOME:=$default_home}"
-: "${NGU_BUILD:=$NGUIDLE_HOME/build}"
-: "${VITASDK:=$HOME/vitasdk}"
+. "$source_dir/tools/environment.sh"
 export VITASDK PATH="$VITASDK/bin:$PATH"
 vgl_rev=2bdbe895ddc6a7e410a9ea55a8f53d8173c61ad8
 agent_rev=ae140b995977829e582885b2a9bfb25b7d286970
@@ -41,6 +38,9 @@ if [ ! -x "$VITASDK/bin/arm-vita-eabi-gcc" ]; then
     echo "Set VITASDK to the installed VitaSDK." >&2
     exit 1
 fi
+bash "$source_dir/tools/engine.sh" >/dev/null
+nightly=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$source_dir/rust-toolchain.toml")
+rustup toolchain install "$nightly" --profile minimal --component rust-src
 mkdir -p -- "$NGUIDLE_HOME/toolchains/sources" "$vgl_build" "$agent_dir"
 checkout() {
     local remote=$1 directory=$2 revision=$3

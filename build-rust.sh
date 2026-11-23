@@ -4,7 +4,7 @@ set -euo pipefail
 . "$HOME/.cargo/env"
 source_dir=$(cd "$(dirname "$0")" && pwd)
 . "$source_dir/tools/environment.sh"
-engine=$NGUIDLE_RUST
+engine=$(bash "$source_dir/tools/engine.sh")
 build=$NGU_VITA_BUILD_DIR
 nightly=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$source_dir/rust-toolchain.toml")
 test -n "$nightly"

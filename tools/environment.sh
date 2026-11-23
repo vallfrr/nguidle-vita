@@ -1,22 +1,18 @@
 #!/usr/bin/env bash
-# Resolve the current engine installation. The tag migration is a separate change.
-vita_repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
-vita_parent=$(dirname -- "$vita_repo")
-if [ -d "$vita_parent/nguidle-rust/tools" ]; then
-    ngu_engine_default="$vita_parent/nguidle-rust"
-elif [ -d "$vita_parent/../nguvita/tools" ]; then
-    ngu_engine_default=$(cd -- "$vita_parent/../nguvita" && pwd -P)
+# Platform paths for both standalone and shared developer workspaces.
+NGU_VITA_REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+vita_parent=$(dirname -- "$NGU_VITA_REPO")
+if [ "$(basename -- "$vita_parent")" = repos ]; then
+    vita_home_default=$(dirname -- "$vita_parent")
 else
-    ngu_engine_default=$vita_parent
+    vita_home_default=$NGU_VITA_REPO
 fi
-: "${NGUIDLE_RUST:=$ngu_engine_default}"
-if [ ! -r "$NGUIDLE_RUST/tools/environment.sh" ]; then
-    echo "Set NGUIDLE_RUST to the engine checkout." >&2
-    return 1
-fi
-. "$NGUIDLE_RUST/tools/environment.sh"
+: "${NGUIDLE_HOME:=$vita_home_default}"
+: "${NGU_WORK:=$NGUIDLE_HOME/work}"
+: "${NGU_BUILD:=$NGUIDLE_HOME/build}"
 : "${NGU_VITA_BUILD_DIR:=$NGU_BUILD/vita/host}"
+: "${VITA_AGENT:=$NGUIDLE_HOME/vita-agent/agent.sh}"
 vita_sdk_default=$NGUIDLE_HOME/toolchains/vitasdk
 [ -d "$vita_sdk_default" ] || vita_sdk_default=$HOME/vitasdk
 : "${VITASDK:=$vita_sdk_default}"
-export NGUIDLE_RUST NGU_VITA_BUILD_DIR VITASDK
+export NGUIDLE_HOME NGU_WORK NGU_BUILD NGU_VITA_REPO NGU_VITA_BUILD_DIR VITASDK VITA_AGENT
