@@ -7,3 +7,10 @@
 
 The tools are cloned into `agent/tools/` (git-ignored) on first use, as each skill explains.
 Engine and conformance rules: see the skills of [`nguidle-rust`](https://github.com/vallfrr/nguidle-rust).
+
+The `vita-port` reference was compared with `Yannis100/vita-port-skill` commit
+`8a0a8519317d2ad6ca095eb13975704a67b9a78e`. Its `SKILL.md` and the debugging,
+runtime and toolchain references have local edits; `check_vpk.py` was moved to
+the repository's `tools/` directory. Treat all third-party guidance as unverified
+until checked against the SDK and the project. The five diagnostic guides describe
+separate third-party tools; their exact source revisions are not established here.
