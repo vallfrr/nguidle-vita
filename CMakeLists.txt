@@ -26,7 +26,7 @@ if(NOT EXISTS "${NGU_VGL_LIB}")
 endif()
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,-q -O2 -g -std=gnu11")
-add_executable(ngu main.c stubs.c)
+add_executable(ngu main.c stubs.c host_ime.c host_log.c)
 target_compile_options(ngu PRIVATE -Wall -Wextra)
 if(NGU_NATIVE_LOGIC)
   target_compile_definitions(ngu PRIVATE NGU_NATIVE_LOGIC)
@@ -51,7 +51,7 @@ target_link_libraries(ngu
   SceRtc_stub ScePower_stub SceShaccCg_stub SceIme_stub SceKernelDmacMgr_stub
   pthread stdc++ m z)
 # Leave space for the SCE module metadata appended by vita-elf-create.
-target_link_options(ngu PRIVATE -Wl,--allow-multiple-definition -Wl,--wrap=invoke_splashscreen -Wl,--defsym=__sce_headroom=0x4000)
+target_link_options(ngu PRIVATE -Wl,--wrap=invoke_splashscreen -Wl,--defsym=__sce_headroom=0x4000)
 
 vita_create_self(eboot.bin ngu)
 vita_create_vpk(ngu.vpk ${VITA_TITLEID} eboot.bin
