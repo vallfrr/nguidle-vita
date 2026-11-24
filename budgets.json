@@ -1,0 +1,9 @@
+{
+  "comment": "Performance budgets checked by tools/vita-budget.py against a measurement's summary.json. Times are the host's per-frame work in ms. Update only with a new measurement, in the same commit as the documentation that quotes it.",
+  "scenarios": {
+    "tour": {
+      "p99_ms": 16.7,
+      "max_regression_percent": 10
+    }
+  }
+}

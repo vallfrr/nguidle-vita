@@ -81,6 +81,13 @@ writes a screenshot to `ux0:data/ngu/bench/shot.tga`. Each window reports the
 number of screenshots taken so those windows can be excluded from timing
 comparisons.
 
+Reproducible measurements: `bash tools/vita-cycle.sh tour <label>` builds, installs, runs the scripted `tour` scenario
+and writes `summary.json` and `meta.json` (commits, package, build switches, clocks) under the workspace's
+`traces/vita-60/<label>/`. `python3 tools/vita-budget.py <that folder> [--baseline summary.json]` compares it with the
+versioned budgets in `budgets.json` and exits with an error when one fails. A performance figure may be published only
+with the commit and configuration that `meta.json` records; the counters were repaired in lot 4 (one consistent snapshot
+per window), so figures taken before that are historical.
+
 `NGU_VITA_PROFILE=ON` records slow game callbacks in `ux0:data/ngu/log.txt`.
 Use the default `OFF` for frame-rate comparisons. The default build requests
 444 MHz CPU and 222 MHz GPU clocks and streams one vertex buffer per frame.

@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Add versioned performance budgets (`budgets.json`), `tools/vita-budget.py` to check a measurement against them and a baseline, and `meta.json` written by `tools/vita-cycle.sh` so every figure states its commits and configuration.
 - Use engine `v0.5.0`; document the engine's C ABI contract in `engine_api.h`; add `AGENTS.md` and relate this port to the engine's port template.
 
 - Use engine `v0.3.0`, including the reference-tested random sequence corrections. Vita performance after the Cooking UI correction has not yet been measured.

@@ -65,5 +65,16 @@ if [ -z "$DONE" ]; then echo "no end marker after ${LIMIT}s (crash or far too sl
 [ -s "$OUT/trace.bin" ] || { echo "no trace downloaded"; exit 7; }
 BASE=${BASELINE:-$TRACES/baseline.json}; EXTRA=(); [ -f "$BASE" ] && EXTRA=(--baseline "$BASE")
 echo "== $LABEL ($(basename "$SC"), package $SUM)"
+# what a published figure must state: commits, package, build switches, clocks the startup log reports
+python3 - "$OUT" "$(basename "$SC" .txt)" "$SUM" "${BUILD_VARS:-}" <<'PY'
+import json, re, subprocess, sys
+out, scenario, package, build_vars = sys.argv[1:5]
+git = lambda *args: subprocess.run(["git", *args], capture_output=True, text=True).stdout.strip()
+log = open(out + "/log.txt", errors="replace").read() if __import__("os").path.exists(out + "/log.txt") else ""
+clocks = re.search(r"[Cc]lock[^\n]*", log)
+json.dump({"scenario": scenario, "vita_commit": git("rev-parse", "--short=12", "HEAD"), "engine_commit": git("-C", "engine", "rev-parse", "--short=12", "HEAD"),
+           "package": package, "build_vars": build_vars, "clocks": clocks.group(0).strip() if clocks else "unknown"}, open(out + "/meta.json", "w"))
+PY
 python3 tools/vita-trace.py "$OUT/trace.bin" --scenario "$SC" --log "$OUT/log.txt" --save "$OUT/summary.json" "${EXTRA[@]}" | tee "$OUT/report.txt"
 grep -a "\[autoplay\] check" "$OUT/log.txt" | head -3
+python3 tools/vita-budget.py "$OUT" ${BASELINE:+--baseline "$BASELINE"} || true  # the verdict is informational here; CI-style gating uses the exit code
