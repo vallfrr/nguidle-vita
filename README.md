@@ -81,6 +81,13 @@ writes a screenshot to `ux0:data/ngu/bench/shot.tga`. Each window reports the
 number of screenshots taken so those windows can be excluded from timing
 comparisons.
 
+Reproducible measurements: `bash tools/vita-cycle.sh tour <label>` builds, installs, runs the scripted `tour` scenario
+and writes `summary.json` and `meta.json` (commits, package, build switches, clocks) under the workspace's
+`traces/vita-60/<label>/`. `python3 tools/vita-budget.py <that folder> [--baseline summary.json]` compares it with the
+versioned budgets in `budgets.json` and the reference in `perf/` and exits with an error on a regression over the limit; the 16.7 ms goal is reported but not enforced. A performance figure may be published only
+with the commit and configuration that `meta.json` records; the counters were repaired in lot 4 (one consistent snapshot
+per window), so figures taken before that are historical.
+
 `NGU_VITA_PROFILE=ON` records slow game callbacks in `ux0:data/ngu/log.txt`.
 Use the default `OFF` for frame-rate comparisons. The default build requests
 444 MHz CPU and 222 MHz GPU clocks and streams one vertex buffer per frame.
@@ -137,8 +144,9 @@ The Vita created and reloaded a test save that the PC also read. Other
 hardware checks covered legacy autosave migration, a fresh game, touch
 inventory dragging, dropdown and combat controls, and right-stick scrolling.
 
-The title reaches approximately 60 FPS. Late-game gameplay still misses
-refreshes and advanced-save focus feedback exceeds two refreshes.
+On the scripted `tour` scenario the render loop averages 59.9 FPS, but the work per frame has a
+p99 of about 49 to 51 ms against a 16.7 ms goal, so dense menus still miss refreshes (two runs, 444/222 MHz,
+see `perf/tour-baseline.json`). Advanced-save focus feedback exceeds two refreshes (earlier measurement).
 Sleep/resume and save naming with the system keyboard still need device
 verification. The full [hardware audit](https://github.com/vallfrr/nguidle-rust/blob/main/docs/VITA.md)
 includes figures for both runtime variants, known stalls and verification steps.

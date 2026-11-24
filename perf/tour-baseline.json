@@ -1,0 +1,19 @@
+{
+  "comment": "Reference measurement for the scenario; replace it only with a new measurement whose meta states why.",
+  "summary": {
+    "frames": 18389,
+    "p50": 8.318,
+    "p95": 22.39,
+    "p99": 48.56,
+    "max": 2880.642,
+    "over": 4765
+  },
+  "meta": {
+    "scenario": "tour",
+    "vita_commit": "c65a5ab8a564",
+    "engine_commit": "d92a347add75",
+    "package": "669eae535dd415e6",
+    "build_vars": "",
+    "clocks": "CPU=444 MHz GPU=222 MHz"
+  }
+}
