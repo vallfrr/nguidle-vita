@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- First reproducible measurements of the `tour` scenario (59.9 FPS, p99 work 48.6 to 50.9 ms) and their reference in `perf/`.
 - Add versioned performance budgets (`budgets.json`), `tools/vita-budget.py` to check a measurement against them and a baseline, and `meta.json` written by `tools/vita-cycle.sh` so every figure states its commits and configuration.
 - Use engine `v0.5.0`; document the engine's C ABI contract in `engine_api.h`; add `AGENTS.md` and relate this port to the engine's port template.
 

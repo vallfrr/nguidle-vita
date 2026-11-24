@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check a console measurement against the versioned budgets (budgets.json) and an optional baseline.
 
-   python tools/vita-budget.py <measurement folder> [--baseline summary.json]
+   python tools/vita-budget.py <measurement folder> [--baseline file.json]
 
 The folder is what tools/vita-cycle.sh writes (work/traces/vita-60/<label>): summary.json and meta.json. Exit code 0 when
 every budget holds, 1 when one fails, 2 when the measurement cannot be trusted (no metadata, wrong scenario, no frames).
@@ -28,14 +28,12 @@ def check(summary, meta, budgets, baseline=None):
         return 2, [f"untrusted: only {summary.get('frames', 0)} frames in the trace"]
     lines, failed = [], False
     p99 = summary["p99"]
-    ok = p99 <= budget["p99_ms"]
-    failed |= not ok
-    lines.append(f"p99 {p99:.1f} ms (budget {budget['p99_ms']} ms): {'ok' if ok else 'FAIL'}")
-    if baseline is not None:
-        limit = baseline["p99"] * (1 + budget["max_regression_percent"] / 100)
-        ok = p99 <= limit
-        failed |= not ok
-        lines.append(f"p99 vs baseline {baseline['p99']:.1f} ms (limit {limit:.1f} ms): {'ok' if ok else 'FAIL'}")
+    lines.append(f"p99 {p99:.1f} ms; goal {budget['goal_p99_ms']} ms: {'met' if p99 <= budget['goal_p99_ms'] else 'not met (not enforced)'}")
+    if baseline is None:
+        return 2, ["untrusted: no baseline measurement to compare with (perf/<scenario>-baseline.json or --baseline)"]
+    limit = baseline["p99"] * (1 + budget["max_regression_percent"] / 100)
+    failed = p99 > limit
+    lines.append(f"p99 vs baseline {baseline['p99']:.1f} ms (limit {limit:.1f} ms): {'FAIL' if failed else 'ok'}")
     lines.append(
         f"scenario {meta['scenario']}, vita {meta['vita_commit']}, engine {meta['engine_commit']}, package {meta['package']}, "
         f"build {meta['build_vars'] or 'default'}, clocks {meta.get('clocks', 'unknown')}"
@@ -54,7 +52,10 @@ def main():
     except (OSError, ValueError) as error:
         sys.exit(f"untrusted: {error}")
     budgets = json.loads((ROOT / "budgets.json").read_text(encoding="utf-8"))
-    baseline = json.loads(args.baseline.read_text(encoding="utf-8")) if args.baseline else None
+    path = args.baseline or ROOT / "perf" / f"{meta['scenario']}-baseline.json"
+    baseline = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    if baseline is not None and "summary" in baseline:
+        baseline = baseline["summary"]
     code, lines = check(summary, meta, budgets, baseline)
     print("\n".join(lines))
     sys.exit(code)

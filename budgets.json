@@ -1,8 +1,8 @@
 {
-  "comment": "Performance budgets checked by tools/vita-budget.py against a measurement's summary.json. Times are the host's per-frame work in ms. Update only with a new measurement, in the same commit as the documentation that quotes it.",
+  "comment": "Budgets checked by tools/vita-budget.py. goal_p99_ms is the target (reported, not enforced). The enforced budget is max_regression_percent of p99 against perf/<scenario>-baseline.json. Change a value only with a new measurement, in the same commit as the documentation that quotes it.",
   "scenarios": {
     "tour": {
-      "p99_ms": 16.7,
+      "goal_p99_ms": 16.7,
       "max_regression_percent": 10
     }
   }

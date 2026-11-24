@@ -70,10 +70,13 @@ python3 - "$OUT" "$(basename "$SC" .txt)" "$SUM" "${BUILD_VARS:-}" <<'PY'
 import json, re, subprocess, sys
 out, scenario, package, build_vars = sys.argv[1:5]
 git = lambda *args: subprocess.run(["git", *args], capture_output=True, text=True).stdout.strip()
-log = open(out + "/log.txt", errors="replace").read() if __import__("os").path.exists(out + "/log.txt") else ""
-clocks = re.search(r"[Cc]lock[^\n]*", log)
+try:
+    host = open(out + "/host.txt", errors="replace").read()
+except OSError:
+    host = ""
+clocks = re.search(r"Clocks [^\n]*", host)
 json.dump({"scenario": scenario, "vita_commit": git("rev-parse", "--short=12", "HEAD"), "engine_commit": git("-C", "engine", "rev-parse", "--short=12", "HEAD"),
-           "package": package, "build_vars": build_vars, "clocks": clocks.group(0).strip() if clocks else "unknown"}, open(out + "/meta.json", "w"))
+           "package": package, "build_vars": build_vars, "clocks": clocks.group(0)[7:].strip() if clocks else "unknown"}, open(out + "/meta.json", "w"))
 PY
 python3 tools/vita-trace.py "$OUT/trace.bin" --scenario "$SC" --log "$OUT/log.txt" --save "$OUT/summary.json" "${EXTRA[@]}" | tee "$OUT/report.txt"
 grep -a "\[autoplay\] check" "$OUT/log.txt" | head -3
