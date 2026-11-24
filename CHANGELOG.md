@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Use engine `v0.3.0`, including the reference-tested random sequence corrections. Vita performance after the Cooking UI correction has not yet been measured.
 - Publish texture queue state before handing uploads to the renderer.
 - Give logic and rendering their own benchmark sample counts and report dropped log lines.
 - Pin the engine to `v0.2.0`.
