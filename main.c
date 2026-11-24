@@ -1,3 +1,4 @@
+#include "host_ime.h"
 // NGU Idle PS Vita: C host (vitaGL + touch) around the Rust library `clr`.
 #include <stdint.h>
 #include <stdatomic.h>
@@ -8,7 +9,8 @@
 #include <string.h>
 #include <vitasdk.h>
 #include <vitaGL.h>
-#include "log_queue.h"
+#include "host_log.h"
+#include "engine_api.h"
 #ifdef NGU_VITA_BENCHMARK
 #include "perf_stats.h"
 #endif
@@ -25,83 +27,6 @@
 #define SYSTEM_RAM_MB 4
 
 int _newlib_heap_size_user = HEAP_MB * 1024 * 1024;
-
-typedef struct { float x, y, u, v; uint32_t rgba; } NguVertex;
-typedef struct { uint32_t tex, nearest; int32_t clip[4]; uint32_t first, count; } NguBatch;
-
-int ngu_init(const char *dir, int w, int h);
-#ifdef NGU_NATIVE_LOGIC
-int ngu_vita_init_native(const char *dir, int w, int h);
-#define ngu_init ngu_vita_init_native
-#endif
-void ngu_frame(float dt, float x, float y, int down);
-int ngu_pad(uint32_t action);
-void ngu_scroll(float dx, float dy);
-int ngu_emit(void);
-uint32_t ngu_emit_seq(void);
-void ngu_tex_release(uint32_t id);
-uint32_t ngu_layout_us(void);
-const NguBatch *ngu_batches(void);
-const NguVertex *ngu_vertices(void);
-const uint8_t *ngu_tex(uint32_t id, uint32_t *w, uint32_t *h);
-const uint8_t *ngu_atlas(int *dirty, uint32_t *size);
-int ngu_text_request(char *buf, int cap, int *max, int *numeric);
-void ngu_text_submit(const char *text, int ok);
-uint64_t ngu_clock_us(uint64_t *debt_us);
-int ngu_autoplay_load(const char *path);
-void ngu_frame_info(uint32_t *out);
-
-// Log lines: written at once during start-up, then handed to a worker thread so neither the logic nor the render thread waits on storage
-// (a synchronous append took ~80 ms and showed up as a missed-frame run every 5 s).
-static LogQueue g_logq;
-static atomic_flag g_log_lock = ATOMIC_FLAG_INIT;
-static SceUID g_log_sema = -1;
-static atomic_int g_log_async;
-
-static void hlog_sync(const char *text) {
-    FILE *f = fopen(LOG_FILE, "a");
-    if (!f) return;
-    fputs(text, f);
-    fclose(f);
-}
-
-static int log_thread(SceSize args, void *argp) {
-    (void)args; (void)argp;
-    unsigned reported = 0;
-    for (;;) {
-        sceKernelWaitSema(g_log_sema, 1, NULL);
-        for (;;) {
-            char line[LOG_LINE_SIZE];
-            while (atomic_flag_test_and_set_explicit(&g_log_lock, memory_order_acquire)) {}
-            int available = log_queue_pop(&g_logq, line);
-            unsigned dropped = g_logq.dropped;
-            atomic_flag_clear_explicit(&g_log_lock, memory_order_release);
-            if (dropped != reported) {
-                char loss[80];
-                snprintf(loss, sizeof loss, "[host] log lines dropped total=%u\n", dropped);
-                hlog_sync(loss);
-                reported = dropped;
-            }
-            if (!available) break;
-            hlog_sync(line);
-        }
-    }
-    return 0;
-}
-
-__attribute__((format(printf, 1, 2)))
-static void hlog(const char *fmt, ...) {
-    char buf[LOG_LINE_SIZE];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(buf, sizeof buf, fmt, ap);
-    va_end(ap);
-    if (!atomic_load(&g_log_async)) { hlog_sync(buf); return; }
-    while (atomic_flag_test_and_set_explicit(&g_log_lock, memory_order_acquire)) {}
-    int wake = log_queue_push(&g_logq, buf);
-    atomic_flag_clear_explicit(&g_log_lock, memory_order_release);
-    if (wake) sceKernelSignalSema(g_log_sema, 1);
-}
 
 #define MAX_TEX 8192
 static GLuint g_tex[MAX_TEX];
@@ -507,77 +432,6 @@ static void save_shot(const char *path) {
 static atomic_uint g_shot_request; // zero: none, UINT32_MAX: manual, otherwise scenario number
 
 
-// ---------------------------------------------------------------- system keyboard (IME)
-static atomic_int g_ime_active, g_ime_req, g_ime_res; // active: set by L when it posts a request, cleared by L once it has the result
-static int g_ime_dialog;                              // R only
-static char g_ime_tb[300], g_ime_out[600];
-static int g_ime_tmax, g_ime_tnum;
-static uint16_t g_ime_title[32], g_ime_init[130], g_ime_buf[130];
-
-static void utf8_to_utf16(const char *s, uint16_t *d, int cap) {
-    int n = 0;
-    while (*s && n < cap - 1) {
-        uint32_t c = (uint8_t)*s++;
-        if (c >= 0xF0) { c = ((c & 7) << 18) | ((uint8_t)s[0] & 63) << 12 | ((uint8_t)s[1] & 63) << 6 | ((uint8_t)s[2] & 63); s += 3; }
-        else if (c >= 0xE0) { c = ((c & 15) << 12) | (((uint8_t)s[0] & 63) << 6) | ((uint8_t)s[1] & 63); s += 2; }
-        else if (c >= 0xC0) { c = ((c & 31) << 6) | ((uint8_t)s[0] & 63); s += 1; }
-        if (c >= 0x10000) { c -= 0x10000; if (n < cap - 2) { d[n++] = 0xD800 | (c >> 10); d[n++] = 0xDC00 | (c & 0x3FF); } }
-        else d[n++] = (uint16_t)c;
-    }
-    d[n] = 0;
-}
-
-static void utf16_to_utf8(const uint16_t *s, char *d, int cap) {
-    int n = 0;
-    while (*s && n < cap - 5) {
-        uint32_t c = *s++;
-        if (c >= 0xD800 && c < 0xDC00 && *s) { c = 0x10000 + ((c & 0x3FF) << 10) + (*s++ & 0x3FF); }
-        if (c < 0x80) d[n++] = c;
-        else if (c < 0x800) { d[n++] = 0xC0 | (c >> 6); d[n++] = 0x80 | (c & 63); }
-        else if (c < 0x10000) { d[n++] = 0xE0 | (c >> 12); d[n++] = 0x80 | ((c >> 6) & 63); d[n++] = 0x80 | (c & 63); }
-        else { d[n++] = 0xF0 | (c >> 18); d[n++] = 0x80 | ((c >> 12) & 63); d[n++] = 0x80 | ((c >> 6) & 63); d[n++] = 0x80 | (c & 63); }
-    }
-    d[n] = 0;
-}
-
-static void ime_start(const char *init, int max, int numeric) {
-    SceImeDialogParam p;
-    sceImeDialogParamInit(&p);
-    utf8_to_utf16("NGU Idle", g_ime_title, 32);
-    utf8_to_utf16(init, g_ime_init, 130);
-    memset(g_ime_buf, 0, sizeof g_ime_buf);
-    p.supportedLanguages = 0x0001FFFF;
-    p.languagesForced = SCE_TRUE;
-    p.type = numeric ? SCE_IME_TYPE_EXTENDED_NUMBER : SCE_IME_TYPE_DEFAULT;
-    p.option = 0;
-    p.dialogMode = SCE_IME_DIALOG_DIALOG_MODE_WITH_CANCEL;
-    p.textBoxMode = SCE_IME_DIALOG_TEXTBOX_MODE_WITH_CLEAR;
-    p.title = g_ime_title;
-    p.maxTextLength = (max > 0 && max <= 128) ? max : 128;
-    p.initialText = g_ime_init;
-    p.inputTextBuffer = g_ime_buf;
-    if (sceImeDialogInit(&p) >= 0) g_ime_dialog = 1;
-    else { g_ime_out[0] = 0; atomic_store(&g_ime_res, 2); }
-}
-
-static void ime_poll(void) {
-    if (!g_ime_dialog) return;
-    if (sceImeDialogGetStatus() == SCE_COMMON_DIALOG_STATUS_FINISHED) {
-        SceImeDialogResult r;
-        memset(&r, 0, sizeof r);
-        sceImeDialogGetResult(&r);
-        if (r.button == SCE_IME_DIALOG_BUTTON_ENTER) {
-            utf16_to_utf8(g_ime_buf, g_ime_out, sizeof g_ime_out);
-            atomic_store(&g_ime_res, 1);
-        } else {
-            g_ime_out[0] = 0;
-            atomic_store(&g_ime_res, 2);
-        }
-        sceImeDialogTerm();
-        g_ime_dialog = 0;
-    }
-}
-
 static void setup_draw_state(void) {
     glClearColor(0, 0, 0, 1);
     glViewport(0, 0, 960, 544);
@@ -837,7 +691,7 @@ static int game_thread(SceSize args, void *argp) {
     setenv("NGU_VITA_PROFILE", "1", 1);
 #endif
 #endif
-    remove(LOG_FILE);
+    host_log_init(LOG_FILE);
     hlog("[host] Starting %s\n", PROFILE_DIR);
     sceTouchSetSamplingState(SCE_TOUCH_PORT_FRONT, SCE_TOUCH_SAMPLING_STATE_START);
     sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
@@ -909,9 +763,7 @@ static int game_thread(SceSize args, void *argp) {
     // From here on two threads: this one (L) runs input, simulation, layout and the draw list at ~60 Hz;
     // R (render_thread) presents the newest finished list at the display rate, whatever L is doing.
     PERF(g_load_start = load_start);
-    g_log_sema = sceKernelCreateSema("ngu-log", 0, 0, 1, NULL);
-    SceUID lt = g_log_sema < 0 ? g_log_sema : sceKernelCreateThread("ngu-log", log_thread, 0x10000100, 64 * 1024, 0, 0, NULL);
-    if (lt >= 0 && sceKernelStartThread(lt, 0, NULL) >= 0) atomic_store(&g_log_async, 1);
+    host_log_start();
     // the render thread gets its own core (user core 0); if the system refuses the mask, any core
     SceUID rt = sceKernelCreateThread("ngu-render", render_thread, 0x10000100, 512 * 1024, 0, SCE_KERNEL_CPU_MASK_USER_0, NULL);
     if (rt < 0) rt = sceKernelCreateThread("ngu-render", render_thread, 0x10000100, 512 * 1024, 0, 0, NULL);
