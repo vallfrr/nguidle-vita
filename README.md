@@ -88,6 +88,10 @@ versioned budgets in `budgets.json` and the reference in `perf/` and exits with 
 with the commit and configuration that `meta.json` records; the counters were repaired in lot 4 (one consistent snapshot
 per window), so figures taken before that are historical.
 
+The `[autoplay] check` line at the end of a scenario is a digest of the game's save text. It differs between runs on the console,
+because the game reads the wall clock there (`DateTime.Now`); the PC regression runs pin the clock with `NGU_FIXED_NOW`. Compare
+digests only between runs with the same fixed clock, never between two console runs.
+
 `NGU_VITA_PROFILE=ON` records slow game callbacks in `ux0:data/ngu/log.txt`.
 Use the default `OFF` for frame-rate comparisons. The default build requests
 444 MHz CPU and 222 MHz GPU clocks and streams one vertex buffer per frame.
