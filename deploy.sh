@@ -6,7 +6,7 @@ source_dir=$(cd "$(dirname "$0")" && pwd)
 build=$NGU_VITA_BUILD_DIR
 package="$build/ngu.vpk"
 agent() { bash "${VITA_AGENT:?Set VITA_AGENT to your local Vita agent wrapper}" "$@"; }
-python3 "$source_dir/.claude/skills/vita-port/scripts/check_vpk.py" "$package"
+python3 "$source_dir/tools/check_vpk.py" "$package"
 digest=$(sha256sum < "$package")
 # Keep previously verified agent uploads tied to the same package contents.
 remote="ux0:data/ngu/ngu-${digest:0:16}.vpk"

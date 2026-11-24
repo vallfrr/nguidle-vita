@@ -337,7 +337,7 @@ A `vita-elf-create` error about relocations means `-Wl,-q` is missing.
   (`vita-mksfoex -s TITLE_ID=X "x" out.sfo` writes `ATTRIBUTE2=0x0`; with `-d ATTRIBUTE2=12` it
   writes `0xC`). An unreleased `vita-toolchain` master was seen to default it to `0x0C`, so do not
   rely on the default either way: pass `-d ATTRIBUTE2=12` when the port needs more than 256 MiB and
-  check the result with `scripts/check_vpk.py`, which prints the value. Other defaults: `CATEGORY=gd`,
+  check the result with `tools/check_vpk.py`, which prints the value. Other defaults: `CATEGORY=gd`,
   `ATTRIBUTE=0x8000`. Meaning of the bits is in `references/runtime.md`.
 - A VPK is a zip: `eboot.bin`, `sce_sys/param.sfo`, `sce_sys/icon0.png`, `sce_sys/livearea/contents/*`
   and any extra `FILE` entries. Install with VitaShell from `ux0:/vpk/` or by FTP.
@@ -346,7 +346,7 @@ A `vita-elf-create` error about relocations means `-Wl,-q` is missing.
 - For large asset sets, build a *slim* VPK too (same eboot, no assets) that falls back to
   `ux0:data/<name>/assets` when `app0:/assets` is absent; code iterations then reinstall in seconds
   (STSPSVITA: ~7 MB slim vs ~335 MB full).
-- Run `scripts/check_vpk.py` on every build.
+- Run `tools/check_vpk.py` on every build.
 - **The text→data gap is a `mod 64 KiB` accident, and it breaks links on ordinary edits.**
   `vita-elf-create` must place its SCE data in the gap between `.text` and the data segment; when the gap
   falls under 8 KiB the link fails with

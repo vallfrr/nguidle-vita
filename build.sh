@@ -26,5 +26,5 @@ cmake -S "$source_dir" -B "$build" -DCMAKE_BUILD_TYPE=Release \
     -DNGU_VITA_FAST_CLOCKS="${NGU_VITA_FAST_CLOCKS:-ON}" \
     -DNGU_VITA_VERTEX_BUFFER="${NGU_VITA_VERTEX_BUFFER:-ON}"
 cmake --build "$build" -j4
-python3 "$source_dir/.claude/skills/vita-port/scripts/check_vpk.py" "$build/ngu.vpk"
+python3 "$source_dir/tools/check_vpk.py" "$build/ngu.vpk"
 printf 'VPK: %s\n' "$build/ngu.vpk"
