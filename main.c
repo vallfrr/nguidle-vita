@@ -686,9 +686,9 @@ static int game_thread(SceSize args, void *argp) {
     sceIoMkdir(DATA_DIR, 0777);
 #ifdef NGU_VITA_BENCHMARK
     sceIoMkdir(PROFILE_DIR, 0777);
-    if (setenv("NGU_VITA_SAVE_DIR", PROFILE_DIR "/save", 1) != 0) return 1;
+    if (setenv("NGU_SAVE_DIR", PROFILE_DIR "/save", 1) != 0) return 1;
 #ifdef NGU_VITA_PROFILE
-    setenv("NGU_VITA_PROFILE", "1", 1);
+    setenv("NGU_PROFILE", "1", 1);
 #endif
 #endif
     host_log_init(LOG_FILE);
@@ -728,6 +728,7 @@ static int game_thread(SceSize args, void *argp) {
     vglSwapBuffers(GL_FALSE);
 
     uint64_t load_start = now_us();
+    ngu_set_host_tuning(15); /* background autosave, single-writer storage, fonts worker, layout timing */
     int r = ngu_init(DATA_DIR, 960, 544);
     hlog("[host] ngu_init -> %d in %llu ms\n", r, (unsigned long long)((now_us() - load_start) / 1000));
     if (r != 0) {

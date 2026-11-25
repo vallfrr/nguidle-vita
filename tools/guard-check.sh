@@ -15,7 +15,7 @@ for mode in on off; do
   prefix=$NGU_STATE_DIR/guard-$mode
   [ "$mode" = off ] && export NGU_NO_GUARD=1 || unset NGU_NO_GUARD
   mkdir -p "$prefix-save"
-  CLR_PROF=1 NGU_VITA_SAVE_DIR="$prefix-save" NGU_FIXED_NOW=1700000000 \
+  CLR_PROF=1 NGU_SAVE_DIR="$prefix-save" NGU_FIXED_NOW=1700000000 \
     "$CARGO_TARGET_DIR/release/clr" x autoplay "$assets" "$SC" "$prefix.csv" > "$prefix.prof.txt" 2>&1
   grep -a "\[autoplay\] check" "$assets/log.txt" | sed 's/ tick=.*//' > "$prefix.checks"
   echo "$mode: $(grep -a '^total' "$prefix.prof.txt")  checks=$(wc -l < "$prefix.checks")"
