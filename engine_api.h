@@ -14,10 +14,6 @@ typedef struct { uint32_t tex, nearest; int32_t clip[4]; uint32_t first, count; 
 
 /* Load the game. data_dir holds the prepared data (or ngu.pak). 0 ok, 1 DLL missing, 2 scene, 3 save menu. */
 int ngu_init(const char *dir, int w, int h);
-#ifdef NGU_NATIVE_LOGIC
-int ngu_vita_init_native(const char *dir, int w, int h);
-#define ngu_init ngu_vita_init_native
-#endif
 /* Advance dt seconds and set the pointer (x, y device pixels, negative = none; down = finger down), once per display frame. */
 void ngu_frame(float dt, float x, float y, int down);
 /* Navigation: one ASCII code, u d l r (move), a (activate), b (back), p n (previous, next menu). Returns 1 if the focus moved. */
