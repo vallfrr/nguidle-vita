@@ -12,15 +12,9 @@ if [ ! -s "$vgl" ]; then
 fi
 bash "$source_dir/build-rust.sh"
 target=armv7-sony-vita-newlibeabihf
-if [ "${NGU_VITA_LOGIC:-interpreter}" = native ]; then
-    archive="$build/cargo/$target/game/libngu_native_vita.a"
-    native=ON
-else
-    archive="$build/cargo/$target/release/libclr.a"
-    native=OFF
-fi
+archive="$build/cargo/$target/release/libclr.a"
 cmake -S "$source_dir" -B "$build" -DCMAKE_BUILD_TYPE=Release \
-    -DNGU_RUST_LIB="$archive" -DNGU_NATIVE_LOGIC="$native" -DNGU_VGL_LIB="$vgl" \
+    -DNGU_RUST_LIB="$archive" -DNGU_VGL_LIB="$vgl" \
     -DNGU_VITA_BENCHMARK="${NGU_VITA_BENCHMARK:-OFF}" \
     -DNGU_VITA_PROFILE="${NGU_VITA_PROFILE:-OFF}" \
     -DNGU_VITA_FAST_CLOCKS="${NGU_VITA_FAST_CLOCKS:-ON}" \

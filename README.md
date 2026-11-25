@@ -35,24 +35,12 @@ bash build.sh
 Install Ruff with `python3 -m pip install ruff==0.11.13` in your Python
 environment. `just check` validates the engine pin and builds the
 interpreter package with `-Wall -Wextra` under `build/vita/check`.
-It sets up only the build dependencies. Console pairing, game data and
-the optional native game build have their own workflow. The interpreter
-build links without accepting multiple definitions. The translated build
-requires its own link check.
+It sets up the build dependencies. Game data and console pairing are
+prepared separately. The resulting VPK is `build/vita/host/ngu.vpk`
+when using the default build directory.
 
-The default build uses the shared CIL interpreter and writes `build/vita/host/ngu.vpk`
-under the workspace.
-The optional translated-Rust build requires generated source from your own
-installation. Generate it in the `engine` checkout using the engine
-instructions, then run from the Vita repository:
-
-```sh
-source tools/environment.sh
-NGU_VITA_LOGIC=native NGU_VITA_BUILD_DIR="$NGU_BUILD/vita/native" bash build.sh
-```
-
-`VITASDK` defaults to the workspace SDK or `$HOME/vitasdk`. Both builds
-verify the VPK headers and LiveArea PNG format. The optional read-only
+`VITASDK` defaults to the workspace SDK or `$HOME/vitasdk`. The build
+verifies the VPK headers and LiveArea PNG format. The optional read-only
 console check is `bash tools/doctor.sh --probe-console`.
 
 ## Benchmark on a console
@@ -95,12 +83,10 @@ digests only between runs with the same fixed clock, never between two console r
 `NGU_VITA_PROFILE=ON` records slow game callbacks in `ux0:data/ngu/log.txt`.
 Use the default `OFF` for frame-rate comparisons. The default build requests
 444 MHz CPU and 222 MHz GPU clocks and streams one vertex buffer per frame.
-The interpreter uses thin link-time optimization under the compiler memory cap.
+The interpreter uses thin link-time optimization.
 For comparisons, `NGU_VITA_FAST_CLOCKS=OFF` requests 333 MHz and 166 MHz,
 and `NGU_VITA_VERTEX_BUFFER=OFF` uses client vertex arrays. The startup log
-records the actual clocks. `NGU_VITA_NATIVE_OPT=1` enables an experimental
-translated build profile. It exceeded the default 12 GiB compiler memory cap
-in the full-game build.
+records the actual clocks.
 
 ## Prepare and install your data
 
