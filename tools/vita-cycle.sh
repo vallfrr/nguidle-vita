@@ -22,14 +22,14 @@ A app running > "$OUT/agent.json" 2>&1 || { echo "console unreachable (agent: $(
 if [ -z "${NO_BUILD:-}" ]; then
   env NGU_VITA_BENCHMARK=ON ${BUILD_VARS:-} bash "$NGU_VITA_REPO/build.sh" > "$OUT/build.log" 2>&1 || { echo "build failed:"; tail -8 "$OUT/build.log"; exit 4; }
 fi
-PKG=$NGU_VITA_BUILD_DIR/ngu.vpk; SUM=$(sha256sum < "$PKG" | cut -c1-16)
+PKG=$NGU_VITA_BUILD_DIR/nguidle.vpk; SUM=$(sha256sum < "$PKG" | cut -c1-16)
 if [ "$(cat "$TRACES/.last-deployed" 2>/dev/null)" != "$SUM" ]; then
   bash "$NGU_VITA_REPO/deploy.sh" > "$OUT/deploy.log" 2>&1 || { echo "install failed:"; tail -4 "$OUT/deploy.log"; exit 5; }
   echo "$SUM" > "$TRACES/.last-deployed"
 fi
-B=ux0:data/ngu/bench
+B=ux0:data/nguidle/bench
 for f in trace.bin done.txt host.txt; do A fs trash $B/$f > /dev/null 2>&1; done
-A fs trash ux0:data/ngu/log.txt > /dev/null 2>&1
+A fs trash ux0:data/nguidle/log.txt > /dev/null 2>&1
 [ -z "${KEEP_SAVES:-}" ] && A fs trash $B/save > /dev/null 2>&1  # scenarios start from a clean profile (a stale slot asks to overwrite)
 [ -n "${FIXTURE:-}" ] && A fs upload "$FIXTURE" $B/save/NGUSaveSteam.txt --overwrite > /dev/null 2>&1
 # the agent skips an upload whose content it already sent once (even if the file was removed since): make every upload unique
@@ -50,7 +50,7 @@ while [ $(( $(date +%s) - T0 )) -lt $LIMIT ]; do
   [ -s "$OUT/done.txt" ] && { DONE=1; break; }
 done
 for f in trace.bin host.txt; do A fs download $B/$f "$OUT/$f" > /dev/null 2>&1; done
-A fs download ux0:data/ngu/log.txt "$OUT/log.txt" > /dev/null 2>&1
+A fs download ux0:data/nguidle/log.txt "$OUT/log.txt" > /dev/null 2>&1
 A app close NGUI00001 > /dev/null 2>&1
 # scenarios with `shot` lines: fetch the screenshots (bench/shotN.tga) and make PNGs for a look by eye
 if grep -qE '^[0-9]+ shot' "$SC"; then

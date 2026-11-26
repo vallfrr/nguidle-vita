@@ -4,5 +4,5 @@ set -e
 . "$(dirname -- "${BASH_SOURCE[0]}")/tools/environment.sh"
 OUT=$NGU_WORK/traces/vitalogs
 mkdir -p "$OUT"
-bash "$VITA_AGENT" fs download ux0:data/ngu/shot.tga "$OUT/shot.tga" >/dev/null
+bash "$VITA_AGENT" fs download ux0:data/nguidle/shot.tga "$OUT/shot.tga" >/dev/null
 python3 "$NGU_VITA_REPO/tools/tga2png.py" "$OUT/shot.tga"

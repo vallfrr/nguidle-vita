@@ -4,12 +4,12 @@ set -euo pipefail
 source_dir=$(cd "$(dirname "$0")" && pwd)
 . "$source_dir/tools/environment.sh"
 build=$NGU_VITA_BUILD_DIR
-package="$build/ngu.vpk"
+package="$build/nguidle.vpk"
 agent() { bash "${VITA_AGENT:?Set VITA_AGENT to your local Vita agent wrapper}" "$@"; }
 python3 "$source_dir/tools/check_vpk.py" "$package"
 digest=$(sha256sum < "$package")
 # Keep previously verified agent uploads tied to the same package contents.
-remote="ux0:data/ngu/ngu-${digest:0:16}.vpk"
+remote="ux0:data/nguidle/ngu-${digest:0:16}.vpk"
 running=$(agent app running | python3 -c 'import json, sys
 reply = json.load(sys.stdin)
 if reply.get("status") != "ok":
@@ -21,7 +21,7 @@ case "$running" in
     *) echo "Close the other application before deploying NGU Idle." >&2; exit 1 ;;
 esac
 if [ "${1:-}" = pak ]; then
-    agent fs upload "${NGU_VITA_PAK:-"$build/ngu.pak"}" ux0:data/ngu/ngu.pak --overwrite
+    agent fs upload "${NGU_VITA_PAK:-"$build/ngu.pak"}" ux0:data/nguidle/ngu.pak --overwrite
 fi
 agent fs upload "$package" "$remote" --overwrite
 agent app install "$remote" --yes --timeout 90 | python3 -c 'import sys,json

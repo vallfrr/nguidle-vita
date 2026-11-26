@@ -15,7 +15,7 @@
 #include "perf_stats.h"
 #endif
 
-#define DATA_DIR "ux0:data/ngu"
+#define DATA_DIR "ux0:data/nguidle"
 #ifdef NGU_VITA_BENCHMARK
 #define PROFILE_DIR DATA_DIR "/bench"
 #else

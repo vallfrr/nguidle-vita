@@ -50,7 +50,7 @@ target_link_libraries(ngu
 target_link_options(ngu PRIVATE -Wl,--wrap=invoke_splashscreen -Wl,--defsym=__sce_headroom=0x4000)
 
 vita_create_self(eboot.bin ngu)
-vita_create_vpk(ngu.vpk ${VITA_TITLEID} eboot.bin
+vita_create_vpk(nguidle.vpk ${VITA_TITLEID} eboot.bin
   VERSION ${VITA_VERSION}
   NAME ${VITA_APP_NAME}
   FILE livearea/icon0.png sce_sys/icon0.png
