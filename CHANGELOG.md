@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Use engine `v0.10.0`. The host calls `ngu_set_host_tuning` before `ngu_init` (the engine no longer compiles differently for the Vita), and the benchmark profile uses `NGU_SAVE_DIR` and `NGU_PROFILE`. The legacy save converter is now `legacy-save` / `convert-legacy-save`.
 - First reproducible measurements of the `tour` scenario (59.9 FPS, p99 work 48.6 to 50.9 ms) and their reference in `perf/`.
 - Add versioned performance budgets (`budgets.json`), `tools/vita-budget.py` to check a measurement against them and a baseline, and `meta.json` written by `tools/vita-cycle.sh` so every figure states its commits and configuration.
 - Use engine `v0.5.0`; document the engine's C ABI contract in `engine_api.h`; add `AGENTS.md` and relate this port to the engine's port template.
