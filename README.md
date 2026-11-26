@@ -4,8 +4,19 @@ PS Vita build of the engine from [nguidle-rust](https://github.com/vallfrr/nguid
 The Vita host uses vitaGL and the same game scene, save menus and tooltips as
 the desktop port. It reflows the interface across the 960 × 544 display.
 
-Download [Performance Preview 2](https://github.com/vallfrr/nguidle-vita/releases/tag/vita-performance-preview-2)
-and prepare your own data archive below. The
+## Install
+
+You need to own NGU Idle on Steam (version 1.260). The game files are never
+included: you prepare them yourself from your own copy.
+
+1. Download `nguidle.vpk` and the `nguidle-prep` file for your computer from the
+   [latest release](https://github.com/vallfrr/nguidle-vita/releases).
+2. Run `nguidle-prep`. It finds NGU Idle in your Steam folders (or lets you pick the
+   folder), then asks where to write the result, for example a USB stick.
+3. Copy the `nguidle` folder it creates into `ux0:data/` on the Vita.
+4. Install `nguidle.vpk` with VitaShell and start NGU Idle from the LiveArea.
+
+Saves live in `ux0:data/nguidle/save/`. The
 [Vita port history and hardware audit](https://github.com/vallfrr/nguidle-rust/blob/main/docs/VITA.md)
 records the experiments, test results and remaining issues from the first
 Vita build onward.
@@ -16,7 +27,7 @@ Vita build onward.
 - Cross activates the focused control. Circle closes dropdowns and backs out of save menus.
 - L and R switch game menus. The right stick scrolls the focused area.
 - The touchscreen supports taps and dragging. Text entry uses the Vita keyboard.
-- Select saves a screenshot to `ux0:data/ngu/shot.tga`.
+- Select saves a screenshot to `ux0:data/nguidle/shot.tga`.
 
 ## Build
 
@@ -36,7 +47,7 @@ Install Ruff with `python3 -m pip install ruff==0.11.13` in your Python
 environment. `just check` validates the engine pin and builds the
 interpreter package with `-Wall -Wextra` under `build/vita/check`.
 It sets up the build dependencies. Game data and console pairing are
-prepared separately. The resulting VPK is `build/vita/host/ngu.vpk`
+prepared separately. The resulting VPK is `build/vita/host/nguidle.vpk`
 when using the default build directory.
 
 `VITASDK` defaults to the workspace SDK or `$HOME/vitasdk`. The build
@@ -46,8 +57,8 @@ console check is `bash tools/doctor.sh --probe-console`.
 ## Benchmark on a console
 
 Use `NGU_VITA_BENCHMARK=ON` when building the VPK. The benchmark reads and
-writes saves under `ux0:data/ngu/bench/save/`. Copy a test autosave there
-before launching the benchmark. The standard VPK uses `ux0:data/ngu/save/`.
+writes saves under `ux0:data/nguidle/bench/save/`. Copy a test autosave there
+before launching the benchmark. The standard VPK uses `ux0:data/nguidle/save/`.
 Use a separate output directory for the benchmark package.
 
 ```sh
@@ -55,7 +66,7 @@ source tools/environment.sh
 NGU_VITA_BENCHMARK=ON NGU_VITA_BUILD_DIR="$NGU_BUILD/vita/bench" bash build.sh
 ```
 
-Every five seconds, `ux0:data/ngu/bench/host.txt`
+Every five seconds, `ux0:data/nguidle/bench/host.txt`
 reports render-loop rate, frame intervals, the longest controller poll and
 dispatch, and the time spent on simulation, layout, scene emission, texture uploads,
 draw submission and display sync. The display sampler counts framebuffer
@@ -65,7 +76,7 @@ first scanout of its buffer. It reports measurements over two refreshes
 and samples lost before scanout.
 The log also records simulation time, pending simulation time, CPU time
 for the game thread, and free memory both outside and inside vitaGL. Select
-writes a screenshot to `ux0:data/ngu/bench/shot.tga`. Each window reports the
+writes a screenshot to `ux0:data/nguidle/bench/shot.tga`. Each window reports the
 number of screenshots taken so those windows can be excluded from timing
 comparisons.
 
@@ -80,7 +91,7 @@ The `[autoplay] check` line at the end of a scenario is a digest of the game's s
 because the game reads the wall clock there (`DateTime.Now`); the PC regression runs pin the clock with `NGU_FIXED_NOW`. Compare
 digests only between runs with the same fixed clock, never between two console runs.
 
-`NGU_VITA_PROFILE=ON` records slow game callbacks in `ux0:data/ngu/log.txt`.
+`NGU_VITA_PROFILE=ON` records slow game callbacks in `ux0:data/nguidle/log.txt`.
 Use the default `OFF` for frame-rate comparisons. The default build requests
 444 MHz CPU and 222 MHz GPU clocks and streams one vertex buffer per frame.
 The interpreter uses thin link-time optimization.
@@ -88,29 +99,20 @@ For comparisons, `NGU_VITA_FAST_CLOCKS=OFF` requests 333 MHz and 166 MHz,
 and `NGU_VITA_VERTEX_BUFFER=OFF` uses client vertex arrays. The startup log
 records the actual clocks.
 
-## Prepare and install your data
+## Prepare your data from source
 
-Use the tools from the pinned engine. Set `game_data` to the
-`NGUIdle_Data` folder from your Steam Windows 1.260 installation. The
-preparation dependencies are listed in `engine/tools/requirements-prep.txt`.
+`nguidle-prep` and its command-line twin come from the pinned engine and need no Python.
+In the Rust checkout, `cargo run --release -p ngu-prep --bin ngu-prepare -- vita GAME_FOLDER OUTPUT_FOLDER`
+(GAME_FOLDER is your Steam `NGU IDLE` folder, version 1.260) writes
+`OUTPUT_FOLDER/nguidle/ngu.pak`, to copy to `ux0:data/nguidle/ngu.pak`.
+The VPK contains only the engine and LiveArea assets.
 
-```sh
-game_data=/path/to/NGUIdle_Data
-source tools/environment.sh
-python3 engine/tools/verify_game_data.py "$game_data"
-python3 engine/tools/nguprep.py --game-data "$game_data" --out "$NGU_WORK/prepared/vita"
-python3 engine/tools/pack.py "$NGU_WORK/prepared/vita" "$game_data/Managed/Assembly-CSharp.dll" "$NGU_VITA_BUILD_DIR/ngu.pak"
-```
-
-Install the VPK and copy `ngu.pak` to `ux0:data/ngu/ngu.pak`. Repack the data if
-your archive predates the inclusion of `tags.json`, which places the game menus
-under the resource bar. The VPK contains only the engine and LiveArea assets.
 With a paired Vita agent, run `bash deploy.sh` from this checkout. The wrapper
 installed by setup uses its own private client state. Set `VITA_AGENT` to
-choose another wrapper.
-Pass `pak` if you also want to deploy the prepared data.
+choose another wrapper. Pass `pak` if you also want to deploy the prepared data.
 The deployment script names each uploaded VPK by its content hash. Old VPKs
-can be removed from `ux0:data/ngu/` after installation to reclaim space.
+can be removed from `ux0:data/nguidle/` after installation to reclaim space.
+The older `ux0:data/ngu/` folder is no longer used and can be deleted.
 
 ## Older Vita saves
 
@@ -143,5 +145,4 @@ includes figures for both runtime variants, known stalls and verification steps.
 
 ## License
 
-GPL-3.0. Supply the game data from your own installation. The LiveArea images
-are black placeholders pending the maintainer's artwork.
+GPL-3.0. Supply the game data from your own installation.
