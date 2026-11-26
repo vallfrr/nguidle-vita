@@ -12,6 +12,9 @@
 typedef struct { float x, y, u, v; uint32_t rgba; } NguVertex;                                  /* 20 bytes */
 typedef struct { uint32_t tex, nearest; int32_t clip[4]; uint32_t first, count; } NguBatch;      /* 32 bytes */
 
+/* Host tuning, before ngu_init (process-wide): 1 background autosave, 2 single-writer storage (no hard links), 4 startup fonts
+ * on a worker thread, 8 time the layout (ngu_layout_us). All are off by default. */
+void ngu_set_host_tuning(uint32_t bits);
 /* Load the game. data_dir holds the prepared data (or ngu.pak). 0 ok, 1 DLL missing, 2 scene, 3 save menu. */
 int ngu_init(const char *dir, int w, int h);
 /* Advance dt seconds and set the pointer (x, y device pixels, negative = none; down = finger down), once per display frame. */

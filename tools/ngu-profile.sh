@@ -15,7 +15,7 @@ NGU_STATE_DIR=$(ngu_new_state_run profile)
 assets=$(ngu_fixture_view)
 prefix=$NGU_STATE_DIR/$(basename "$SC" .txt)
 mkdir -p "$NGU_STATE_DIR/save"
-CLR_PROF=1 NGU_VITA_SAVE_DIR="$NGU_STATE_DIR/save" NGU_FIXED_NOW=1700000000 \
+CLR_PROF=1 NGU_SAVE_DIR="$NGU_STATE_DIR/save" NGU_FIXED_NOW=1700000000 \
   "$CARGO_TARGET_DIR/release/clr" x autoplay "$assets" "$SC" "$prefix.csv" > "$prefix.prof.txt" 2>&1
 grep -a "^\[autoplay\]" "$assets/log.txt" > "$prefix.log" || true
 python3 "$NGU_VITA_REPO/tools/vita-trace.py" "$prefix.csv" --scenario "$SC" --log "$prefix.log"
