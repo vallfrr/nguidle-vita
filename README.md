@@ -118,7 +118,7 @@ The earliest Vita build used an internal format. Copy its autosave to your
 computer and create a separate compatible file from the Rust checkout.
 
 ```sh
-cargo run --release -p clr --features legacy-vita-save --bin clr -- /path/to/Assembly-CSharp.dll convert-vita-save old.txt converted.txt
+cargo run --release -p clr --features legacy-save --bin clr -- /path/to/Assembly-CSharp.dll convert-legacy-save old.txt converted.txt
 ```
 
 The converter checks the legacy checksum and preserves the character and its
