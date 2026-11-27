@@ -54,6 +54,7 @@ vita_create_vpk(nguidle.vpk ${VITA_TITLEID} eboot.bin
   VERSION ${VITA_VERSION}
   NAME ${VITA_APP_NAME}
   FILE livearea/icon0.png sce_sys/icon0.png
+  FILE livearea/pic0.png sce_sys/pic0.png
   FILE livearea/bg.png sce_sys/livearea/contents/bg.png
   FILE livearea/startup.png sce_sys/livearea/contents/startup.png
   FILE livearea/template.xml sce_sys/livearea/contents/template.xml)
