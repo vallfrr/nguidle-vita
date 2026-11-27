@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Use engine `v0.12.2`: float arithmetic and `GetComponentInChildren` behave like the original game (found by comparing with it), offline progress is tested against it. The engine no longer converts old internal-format Vita saves (nobody used that format), so the README section about them is removed. Measured on the console (`tour`, 444/222 MHz): 59.9 FPS, work per frame p99 48.4 ms against 48.6 ms before, no crash; the game data was prepared with `ngu-prepare vita`.
 - Use engine `v0.11.4` (the preparation program uses the game's own sprites, a system folder dialog, fixed window sizes, the system dialog for the output folder and installs itself with a desktop shortcut). The data folder is now `ux0:data/nguidle` and the VPK `nguidle.vpk`, matching the `nguidle` folder written by the new `nguidle-prep` program. Add the release workflow that builds the VPK and `nguidle-prep` for Windows, Linux and macOS.
 - Use the game's main menu picture as the LiveArea background.
 - Use engine `v0.10.0`. The host calls `ngu_set_host_tuning` before `ngu_init` (the engine no longer compiles differently for the Vita), and the benchmark profile uses `NGU_SAVE_DIR` and `NGU_PROFILE`. The legacy save converter is now `legacy-save` / `convert-legacy-save`.
