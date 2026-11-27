@@ -114,19 +114,6 @@ The deployment script names each uploaded VPK by its content hash. Old VPKs
 can be removed from `ux0:data/nguidle/` after installation to reclaim space.
 The older `ux0:data/ngu/` folder is no longer used and can be deleted.
 
-## Older Vita saves
-
-The earliest Vita build used an internal format. Copy its autosave to your
-computer and create a separate compatible file from the Rust checkout.
-
-```sh
-cargo run --release -p clr --features legacy-save --bin clr -- /path/to/Assembly-CSharp.dll convert-legacy-save old.txt converted.txt
-```
-
-The converter checks the legacy checksum and preserves the character and its
-timestamp. It creates a new file. Keep the legacy copy and use the converted
-file as an autosave or copy it to a numbered slot.
-
 ## Device verification
 
 The interpreter preview completed a 30-minute advanced-save run on hardware.
