@@ -110,8 +110,9 @@ The VPK contains only the engine and LiveArea assets.
 With a paired Vita agent, run `bash deploy.sh` from this checkout. The wrapper
 installed by setup uses its own private client state. Set `VITA_AGENT` to
 choose another wrapper. Pass `pak` if you also want to deploy the prepared data.
-The deployment script names each uploaded VPK by its content hash. Old VPKs
-can be removed from `ux0:data/nguidle/` after installation to reclaim space.
+The deployment script uploads the package as `ux0:data/nguidle/nguidle.vpk`,
+replacing the previous one, so that folder holds the game data, that package and
+nothing else.
 The older `ux0:data/ngu/` folder is no longer used and can be deleted.
 
 ## Device verification
