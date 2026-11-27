@@ -517,55 +517,40 @@ static void draw_slot(const Slot *s, uint64_t *upload_us) {
     PERF(g_t_swap += now_us() - before_swap);
 }
 
-static float axis(uint8_t value) {
-    float normalized = (value - 128.0f) / 128.0f;
-    if (normalized > 0.22f) return (normalized - 0.22f) / 0.78f;
-    if (normalized < -0.22f) return (normalized + 0.22f) / 0.78f;
-    return 0.0f;
-}
-
 static void pad_update(const SceCtrlData *pad, uint64_t now, float dt, int enabled) {
     static uint32_t previous;
-    static char direction;
-    static uint64_t next_repeat;
+    (void)now;
     uint32_t pressed = pad->buttons & ~previous;
     previous = pad->buttons;
     PERF(if (pressed & (SCE_CTRL_CROSS | SCE_CTRL_CIRCLE | SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER |
                         SCE_CTRL_UP | SCE_CTRL_DOWN | SCE_CTRL_LEFT | SCE_CTRL_RIGHT)) g_pad_edges++);
-    if (!enabled) {
-        direction = 0;
-        return;
+    uint32_t bits = 0;
+    float lx = 0, ly = 0, rx = 0, ry = 0;
+    if (enabled) {
+        static const struct { uint32_t sce, api; } map[] = {
+            {SCE_CTRL_CROSS, 1}, {SCE_CTRL_CIRCLE, 2}, {SCE_CTRL_SQUARE, 4}, {SCE_CTRL_TRIANGLE, 8},
+            {SCE_CTRL_LTRIGGER, 16}, {SCE_CTRL_RTRIGGER, 32}, {SCE_CTRL_START, 64}, {SCE_CTRL_SELECT, 128},
+            {SCE_CTRL_UP, 256}, {SCE_CTRL_DOWN, 512}, {SCE_CTRL_LEFT, 1024}, {SCE_CTRL_RIGHT, 2048},
+        };
+        for (unsigned i = 0; i < sizeof map / sizeof map[0]; i++) if (pad->buttons & map[i].sce) bits |= map[i].api;
+        lx = (pad->lx - 128.0f) / 128.0f;
+        ly = (pad->ly - 128.0f) / 128.0f;
+        rx = (pad->rx - 128.0f) / 128.0f;
+        ry = (pad->ry - 128.0f) / 128.0f;
     }
-    if (pressed & SCE_CTRL_CROSS) ngu_pad('a');
-    else if (pressed & SCE_CTRL_CIRCLE) ngu_pad('b');
-    else if (pressed & SCE_CTRL_LTRIGGER) ngu_pad('p');
-    else if (pressed & SCE_CTRL_RTRIGGER) ngu_pad('n');
-
-    uint32_t held = pad->buttons;
-    char next = 0;
-    if ((held & SCE_CTRL_UP) || pad->ly < 58) next = 'u';
-    else if ((held & SCE_CTRL_DOWN) || pad->ly > 198) next = 'd';
-    else if ((held & SCE_CTRL_LEFT) || pad->lx < 58) next = 'l';
-    else if ((held & SCE_CTRL_RIGHT) || pad->lx > 198) next = 'r';
-    if (next && (next != direction || now >= next_repeat)) {
 #ifdef NGU_VITA_BENCHMARK
-        unsigned start = (unsigned)now_us();
-        int moved = ngu_pad(next);
-        unsigned dpad = SCE_CTRL_UP | SCE_CTRL_DOWN | SCE_CTRL_LEFT | SCE_CTRL_RIGHT;
-        if (moved && (pressed & dpad) && !atomic_load_explicit(&g_focus_frame, memory_order_acquire)) {
-            atomic_store(&g_focus_press_us, start);
-            unsigned frame = atomic_load_explicit(&g_frame_no, memory_order_relaxed);
-            atomic_store_explicit(&g_focus_frame, frame + 1, memory_order_release);
-        }
-#else
-        ngu_pad(next);
-#endif
-        next_repeat = now + (next != direction ? 400000 : 120000);
+    unsigned start = (unsigned)now_us();
+    int moved = ngu_gamepad(bits, lx, ly, rx, ry, dt);
+    unsigned dpad = SCE_CTRL_UP | SCE_CTRL_DOWN | SCE_CTRL_LEFT | SCE_CTRL_RIGHT;
+    if (moved && (pressed & dpad) && !atomic_load_explicit(&g_focus_frame, memory_order_acquire)) {
+        atomic_store(&g_focus_press_us, start);
+        unsigned frame = atomic_load_explicit(&g_frame_no, memory_order_relaxed);
+        atomic_store_explicit(&g_focus_frame, frame + 1, memory_order_release);
     }
-    direction = next;
-    float dx = -axis(pad->rx), dy = axis(pad->ry);
-    float distance = 390.0f * (dt < 0.1f ? dt : 0.1f);
-    if (dx || dy) ngu_scroll(dx * distance, dy * distance);
+#else
+    (void)pressed;
+    ngu_gamepad(bits, lx, ly, rx, ry, dt);
+#endif
 }
 
 // R: owns the GL context from here on. Takes the newest finished list, uploads queued textures, draws, presents (vsync).
@@ -728,7 +713,7 @@ static int game_thread(SceSize args, void *argp) {
     vglSwapBuffers(GL_FALSE);
 
     uint64_t load_start = now_us();
-    ngu_set_host_tuning(15); /* background autosave, single-writer storage, fonts worker, layout timing */
+    ngu_set_host_tuning(31); /* background autosave, single-writer storage, fonts worker, layout timing, console mode always on */
     int r = ngu_init(DATA_DIR, 960, 544);
     hlog("[host] ngu_init -> %d in %llu ms\n", r, (unsigned long long)((now_us() - load_start) / 1000));
     if (r != 0) {

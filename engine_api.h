@@ -13,7 +13,7 @@ typedef struct { float x, y, u, v; uint32_t rgba; } NguVertex;                  
 typedef struct { uint32_t tex, nearest; int32_t clip[4]; uint32_t first, count; } NguBatch;      /* 32 bytes */
 
 /* Host tuning, before ngu_init (process-wide): 1 background autosave, 2 single-writer storage (no hard links), 4 startup fonts
- * on a worker thread, 8 time the layout (ngu_layout_us). All are off by default. */
+ * on a worker thread, 8 time the layout (ngu_layout_us), 16 console mode always on (no on / off setting). All are off by default. */
 void ngu_set_host_tuning(uint32_t bits);
 /* Load the game. data_dir holds the prepared data (or ngu.pak). 0 ok, 1 DLL missing, 2 scene, 3 save menu. */
 int ngu_init(const char *dir, int w, int h);
@@ -21,6 +21,10 @@ int ngu_init(const char *dir, int w, int h);
 void ngu_frame(float dt, float x, float y, int down);
 /* Navigation: one ASCII code, u d l r (move), a (activate), b (back), p n (previous, next menu). Returns 1 if the focus moved. */
 int ngu_pad(uint32_t action);
+/* One frame of gamepad state, before ngu_frame: buttons 1 cross, 2 circle, 4 square, 8 triangle, 16 L, 32 R, 64 start, 128 select,
+ * 256 up, 512 down, 1024 left, 2048 right; sticks -1..1 (x right, y down); dt seconds. The engine decodes taps and holds, repeats and
+ * dead zones. Returns 1 if the selection moved. */
+int ngu_gamepad(uint32_t buttons, float lx, float ly, float rx, float ry, float dt);
 /* Scroll the focused list by dx, dy game pixels. */
 void ngu_scroll(float dx, float dy);
 /* Build the frame; returns the batch count. Read ngu_batches / ngu_vertices before the next engine call. */
