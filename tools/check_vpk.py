@@ -25,7 +25,7 @@ IMAGES = {
     "sce_sys/pic0.png": ((960, 544), False, False),
     LIVEAREA + "bg.png": ((840, 500), True, False),
     LIVEAREA + "bg0.png": ((840, 500), False, False),
-    LIVEAREA + "startup.png": ((280, 158), True, False),
+    LIVEAREA + "startup.png": ((280, 288), True, False),
 }
 # path: (expected size, required, must_have_no_alpha)
 
@@ -117,7 +117,8 @@ def main(argv: list[str]) -> int:
             continue
         if (info["w"], info["h"]) != size:
             errors.append(f"{path}: size {info['w']}x{info['h']}, expected {size[0]}x{size[1]}")
-        if info["ctype"] != 3:
+        # the clickable logo of the "ad0" LiveArea style is a full-colour PNG with alpha (type 6), like other working packages
+        if info["ctype"] != 3 and not (path == LIVEAREA + "startup.png" and info["ctype"] == 6):
             errors.append(f"{path}: colour type {info['ctype']} is not indexed (type 3): install error 0x8010113D; use pngquant")
         if no_alpha and info["has_trns"]:
             warns.append(f"{path}: has transparency (tRNS); icon0 should have no alpha")

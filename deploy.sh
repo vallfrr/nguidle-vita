@@ -28,3 +28,5 @@ reply=json.load(sys.stdin)
 print(json.dumps(reply))
 if not reply.get("result",{}).get("installed"):
     raise SystemExit(1)'
+# The package is only needed for the installation: leave the data folder with the game data alone.
+agent fs trash "$remote" > /dev/null
