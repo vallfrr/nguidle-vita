@@ -1,0 +1,14 @@
+# Hand-written (not generated): the console is away for 1 hour, 3 hours, 1 day and 1 year; the game applies its offline progress.
+0 mark boot
+0 click Load Autosave
+150 click On To The Game!
+450 mark away-1h
+450 away 3600
+520 mark away-3h
+520 away 10800
+590 mark away-1d
+590 away 86400
+660 mark away-1y
+660 away 31536000
+730 mark after
+800 end
