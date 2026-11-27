@@ -23,11 +23,14 @@ Vita build onward.
 
 ## Controls
 
-- D-pad or left stick moves focus. The focused control shows its in-game tooltip.
-- Cross activates the focused control. Circle closes dropdowns and backs out of save menus.
-- L and R switch game menus. The right stick scrolls the focused area.
-- The touchscreen supports taps and dragging. Text entry uses the Vita keyboard.
-- Select saves a screenshot to `ux0:data/nguidle/shot.tga`.
+- D-pad or left stick moves the selection; on an allocation row (+ / - / Cap) left and right take away and add.
+- Cross presses the selection (and picks up / puts down an item); circle goes back; square is the right click ("Cap" on a row);
+  triangle shows or hides the information of the selected controls.
+- L and R (tap) change menu; L held shows every menu; R held then a button gives the game's keyboard shortcuts (R + L changes
+  the page of the adventure skills).
+- Start opens Settings, Select opens Info 'n Stuff. The right stick moves a free cursor.
+- Numbers are typed on an in-game pad; names use the Vita keyboard. The touchscreen supports taps and dragging.
+- The console mode is always on; the scale (100 to 130 %, 120 % by default) is in Settings, page 2.
 
 ## Build
 

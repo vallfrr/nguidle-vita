@@ -18,7 +18,7 @@ cmake -S "$source_dir" -B "$build" -DCMAKE_BUILD_TYPE=Release \
     -DNGU_VITA_BENCHMARK="${NGU_VITA_BENCHMARK:-OFF}" \
     -DNGU_VITA_PROFILE="${NGU_VITA_PROFILE:-OFF}" \
     -DNGU_VITA_FAST_CLOCKS="${NGU_VITA_FAST_CLOCKS:-ON}" \
-    -DNGU_VITA_VERTEX_BUFFER="${NGU_VITA_VERTEX_BUFFER:-ON}"
+    -DNGU_VITA_VERTEX_BUFFER="${NGU_VITA_VERTEX_BUFFER:-ON}" \n    -DNGU_VITA_SLICE_MS="${NGU_VITA_SLICE_MS:-0}"
 cmake --build "$build" -j4
 python3 "$source_dir/tools/check_vpk.py" "$build/nguidle.vpk"
 printf 'VPK: %s\n' "$build/nguidle.vpk"

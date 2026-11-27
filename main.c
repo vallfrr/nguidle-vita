@@ -676,6 +676,9 @@ static int game_thread(SceSize args, void *argp) {
     setenv("NGU_PROFILE", "1", 1);
 #endif
 #endif
+#ifdef NGU_VITA_SLICE_MS
+    setenv("NGU_SLICE_MS", NGU_VITA_SLICE_MS, 1);
+#endif
     host_log_init(LOG_FILE);
     hlog("[host] Starting %s\n", PROFILE_DIR);
     sceTouchSetSamplingState(SCE_TOUCH_PORT_FRONT, SCE_TOUCH_SAMPLING_STATE_START);
