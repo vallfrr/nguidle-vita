@@ -1,0 +1,19 @@
+# Hand-written: picking up and merging items with the controller (FIXTURE = a save with two Sticks and a helmet in the bag).
+0 mark boot
+0 click Load Autosave
+120 click On To The Game!
+300 mark inventory
+300 menu 4
+360 shot
+400 pad dddddddldlllur
+470 shot
+500 pad a
+520 pad r
+560 shot
+600 pad a
+660 shot
+700 pad Q
+760 shot
+780 pad t
+830 shot
+900 end
