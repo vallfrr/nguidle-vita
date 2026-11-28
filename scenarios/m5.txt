@@ -1,0 +1,43 @@
+# Hand-written: console mode screens and buttons on the device (run with FIXTURE=<late save> KEEP_SAVES unset).
+0 mark boot
+0 click Load Autosave
+120 click On To The Game!
+300 mark bt
+300 menu 0
+360 shot
+400 pad t
+420 pad d
+460 shot
+500 pad t
+540 pad S
+600 shot
+640 pad b
+700 pad I
+760 shot
+800 pad b
+850 mark adventure
+850 menu 3
+910 shot
+950 pad X
+1000 shot
+1050 mark inventory
+1050 menu 4
+1110 shot
+1150 pad a
+1170 pad r
+1190 pad a
+1230 shot
+1280 menu 1
+1340 shot
+1380 menu 5
+1440 shot
+1480 menu 8
+1540 shot
+1580 menu 9
+1640 shot
+1680 menu 13
+1740 shot
+1780 pad H
+1840 shot
+1880 pad h
+1940 end
